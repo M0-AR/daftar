@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daftar</title>
+  <link rel="icon" href="logo.svg">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <img src="logo.svg" alt="" width="34" height="34">
+      <div><div class="brand-name">DAFTAR</div><div class="brand-tag">Your documents. Your rules.</div></div>
+    </div>
+    <button class="btn primary block" id="newChat">+ New chat</button>
+    <nav class="nav">
+      <button data-view="chat"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>Chat</button>
+      <button data-view="collections"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/></svg>Collections</button>
+      <button data-view="documents"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6"/></svg>Documents</button>
+      <button data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>Settings</button>
+    </nav>
+    <div class="side-label">Recent chats</div>
+    <div class="chat-list" id="chatList"></div>
+    <div class="side-foot">
+      <div id="statusPill" class="pill">Checking Ollama…</div>
+      <div class="privacy"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>100% local · zero telemetry</div>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="modal" class="modal" hidden><div class="modal-box" id="modalBox"></div></div>
+<div id="toast" class="toast" hidden></div>
+<input type="file" id="filePick" multiple accept=".pdf,.docx,.txt,.md,.csv" hidden>
+<script src="app.js"></script>
+</body>
+</html>

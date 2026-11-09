@@ -1,0 +1,35 @@
+[project]
+name = "daftar"
+version = "0.1.0"
+description = "Private AI document intelligence. Nothing leaves the device."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "httpx>=0.27",
+  "python-multipart>=0.0.9",
+  "pypdf>=5.0",
+  "python-docx>=1.1",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0"]
+dev = ["pytest>=8", "fpdf2>=2.7", "pyinstaller>=6.0"]
+
+[project.scripts]
+daftar = "daftar.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["daftar*"]
+
+[tool.setuptools.package-data]
+daftar = ["static/*"]
+
+[tool.pytest.ini_options]
+markers = ["live: needs a running local Ollama with the configured models"]
+addopts = "-m 'not live'"
