@@ -511,3 +511,95 @@ def test_v2_database_is_migrated_and_reindexed(tmp_path, fake):
         wait_ingest(c.app)
         assert c.app.state.store.one("PRAGMA user_version")["user_version"] == 3
         assert c.app.state.store.one("SELECT section FROM chunks")["section"] == "Handbook > Leave"
+
+
+def test_any_installed_search_model_is_used_when_the_configured_one_is_missing(api, fake):
+    """Default is qwen3-embedding:0.6b; the fake only has nomic-embed-text, which must be used instead."""
+    assert api.c.get("/api/status").json()["settings"]["embed_model"] == "qwen3-embedding:0.6b"
+    cid = api.collection()
+    api.upload(cid, TXT)
+    assert api.c.get("/api/documents").json()[0]["entries"][0]["embed_model"] == "nomic-embed-text"
+    status = api.c.get("/api/status").json()
+    assert status["embed_active"] == "nomic-embed-text" and status["embed_ready"] and status["stale_entries"] == 0
+    assert api.ask(api.chat(cid), "termination notice")[0]["mode"] == "hybrid"
+
+
+def test_qwen3_embedding_instruction_goes_on_queries_only(api, fake):
+    seen = []
+    original = fake.embed
+
+    def spy(self, model, texts, num_ctx=None):
+        seen.extend((model, t) for t in texts)
+        return original(self, model, texts, num_ctx)
+    fake.embed = spy
+    fake.models_installed = ["fake-chat:latest", "qwen3-embedding:0.6b"]
+    cid = api.collection()
+    api.upload(cid, ("a.txt", b"Invoices are payable within forty-five days.", "text/plain"))
+    api.ask(api.chat(cid), "When are invoices due?")
+    docs = [t for m, t in seen if "Invoices are payable" in t]
+    queries = [t for m, t in seen if "When are invoices due?" in t]
+    assert docs and all(not t.startswith("Instruct:") for t in docs)
+    assert queries == ["Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:When are invoices due?"]
+
+
+# --- OCR for scanned PDFs and images ---------------------------------------------------------
+def _scanned_pdf(text_pages=()):
+    """A PDF whose first page is an image only (no text layer), followed by optional real text pages."""
+    import io as _io
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (600, 200), "white")
+    ImageDraw.Draw(img).text((20, 80), "warranty thirty-six months", fill="black")
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.image(_io.BytesIO(buf.getvalue()), x=10, y=10, w=180)
+    for t in text_pages:
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=12)
+        pdf.cell(0, 10, t)
+    return bytes(pdf.output()), buf.getvalue()
+
+
+def test_scanned_pdf_is_read_with_ocr(api, fake):
+    fake.models_installed = ["fake-chat:latest", "nomic-embed-text:latest", "paddleocr-vl:1.6"]
+    pdf, _ = _scanned_pdf(text_pages=["Page two has a real text layer about invoices."])
+    cid = api.collection()
+    api.upload(cid, ("scan.pdf", pdf, "application/pdf"))
+    entry = api.c.get("/api/documents").json()[0]["entries"][0]
+    assert entry["status"] == "ready" and entry["chunks"] >= 1
+    assert len(fake.vision_calls) == 1  # only the page without text went to OCR
+    call = fake.vision_calls[0]
+    assert call["model"] == "paddleocr-vl:1.6" and call["prompt"] == "OCR:" and call["png"].startswith(b"\x89PNG")
+    top = api.ask(api.chat(cid), "How long is the warranty?")[0]["sources"][0]
+    assert "thirty-six months" in top["text"] and top["page"] == 1
+
+
+def test_photo_upload_is_read_with_any_vision_model(api, fake):
+    fake.models_installed = ["fake-chat:latest", "nomic-embed-text:latest", "some-vision-ocr:latest"]
+    _, png = _scanned_pdf()
+    cid = api.collection()
+    res = api.upload(cid, ("receipt.png", png, "image/png"))
+    assert "added_to" in res[0]
+    assert fake.vision_calls[0]["model"] == "some-vision-ocr:latest"
+    assert fake.vision_calls[0]["prompt"].startswith("Transcribe all text")  # generic vision models get words
+    assert api.c.get("/api/documents").json()[0]["entries"][0]["status"] == "ready"
+
+
+def test_scan_without_ocr_model_explains_what_to_do(api, fake):
+    pdf, _ = _scanned_pdf()
+    cid = api.collection()
+    api.upload(cid, ("scan.pdf", pdf, "application/pdf"))
+    entry = api.c.get("/api/documents").json()[0]["entries"][0]
+    assert entry["status"] == "error" and "install an OCR model" in entry["error"]
+    assert fake.vision_calls == []
+
+
+def test_cpu_only_ollama_is_reported(api, fake):
+    assert api.c.get("/api/status").json()["compute"] is None  # nothing loaded yet: unknown
+    fake.loaded = [{"name": "gemma3:1b", "size": 1200, "size_vram": 0}]
+    assert api.c.get("/api/status").json()["compute"] == "cpu"
+    fake.loaded = [{"name": "gemma3:1b", "size": 1200, "size_vram": 1200}]
+    assert api.c.get("/api/status").json()["compute"] == "gpu"
+    fake.loaded = [{"name": "big:27b", "size": 1200, "size_vram": 600}]
+    assert api.c.get("/api/status").json()["compute"] == "partial"

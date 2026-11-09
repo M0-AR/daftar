@@ -1,4 +1,5 @@
 """Local HTTP API + static UI. Binds to loopback; talks only to the configured Ollama server."""
+import base64
 import collections as pycollections
 import hashlib
 import json
@@ -20,7 +21,7 @@ from pydantic import BaseModel
 from daftar import APP_NAME, __version__
 from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
-from daftar.ingest import SUPPORTED, chunk_sections, extract, word_count
+from daftar.ingest import SUPPORTED, chunk_sections, clean_pdf_text, extract, page_image_png, scanned_pages, word_count
 from daftar.ollama import LOOPBACK, Ollama, check_url, prefixes
 from daftar.rag import Retriever, fit_prompt
 from daftar.store import Store
@@ -70,6 +71,11 @@ class LocalOnly:
         if problem:
             return await JSONResponse({"detail": problem}, status_code=403)(scope, receive, send)
         await self.app(scope, receive, send)
+
+
+def bare(name: str | None) -> str | None:
+    """Model name without Ollama's implicit ':latest' tag (how index entries record it)."""
+    return name[:-7] if name and name.endswith(":latest") else name
 
 
 def installed(name: str, models: list[str]) -> str | None:
@@ -130,30 +136,80 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
     def file_path(doc: dict) -> Path:
         return files_dir / f"{doc['id']}{doc['ext']}"
 
-    embed_cache = {"at": 0.0, "key": None, "ready": False}
+    embed_cache = {"at": 0.0, "key": None, "model": None}
 
-    def embed_ready() -> bool:
-        """Is the configured search model installed? Cached briefly so list views don't hammer Ollama."""
+    def active_embed() -> str | None:
+        """The search model actually in use (configured one, else any installed embedder), without ':latest'.
+        Cached briefly so list views don't hammer Ollama."""
         key = (settings["ollama_url"], settings["embed_model"])
         if embed_cache["key"] != key or time.time() - embed_cache["at"] > 10:
             try:
-                embed_cache["ready"] = bool(installed(settings["embed_model"], ollama().models()))
+                client = ollama()
+                embed_cache["model"] = bare(resolve_embed_model(client, installed_models(client)))
             except Exception:
-                embed_cache["ready"] = False
+                embed_cache["model"] = None
             embed_cache.update(at=time.time(), key=key)
-        return embed_cache["ready"]
+        return embed_cache["model"]
+
+    def embed_ready() -> bool:
+        return active_embed() is not None
 
     def is_stale(entry: dict) -> bool:
-        """Would re-indexing change this entry? (Missing vectors only count if the search model is installed.)"""
+        """Would re-indexing change this entry? (Missing vectors only count if a search model is installed.)"""
         if entry["chunk_size"] != settings["chunk_size"] or entry["chunk_overlap"] != settings["chunk_overlap"]:
             return True
-        return entry["embed_model"] != settings["embed_model"] and embed_ready()
+        active = active_embed()
+        return active is not None and entry["embed_model"] != active
 
     def need(cond, code: int, msg: str):
         if not cond:
             raise HTTPException(code, msg)
 
     # --- ingestion ------------------------------------------------------------
+    progress = {}  # entry id -> "Reading scanned page 3 of 12" (shown while indexing)
+
+    def resolve_ocr_model(client, models: list[str]) -> str | None:
+        """Configured OCR model if installed, else an installed vision model (OCR-named first, then largest)."""
+        chosen = installed(settings["ocr_model"], models)
+        if chosen:
+            return chosen
+        seeing = [m for m in models if "vision" in model_meta(client, m)["capabilities"]]
+        return max(seeing, key=lambda m: ("ocr" in m.lower(), sizes.get(m, 0)), default=None)
+
+    def ocr_prompt(client, model: str) -> str:
+        # PaddleOCR-VL is trained on fixed task prompts ("OCR:", "Table Recognition:", ...); general VLMs need words.
+        if model_meta(client, model).get("architecture") == "paddleocr" or "paddleocr" in model.lower():
+            return "OCR:"
+        return ("Transcribe all text in this image exactly as written, in reading order, keeping the original "
+                "language. Output only the transcription.")
+
+    def read_with_ocr(entry_id: int, doc: dict) -> list[tuple[int, str]]:
+        """Extract text; pages without a text layer (scans, photos) go through the local OCR model."""
+        path = file_path(doc)
+        pages = extract(path)
+        todo = scanned_pages(pages, doc["ext"])
+        if not todo:
+            return pages
+        try:
+            client = ollama()
+            model = resolve_ocr_model(client, installed_models(client))
+        except Exception as e:
+            log.warning("OCR unavailable for %s: %s", doc["name"], e)
+            model = None
+        if not model:
+            log.info("%s has %d page(s) without text and no OCR model is installed", doc["name"], len(todo))
+            return pages
+        prompt, texts = ocr_prompt(client, model), dict(pages)
+        for n, page in enumerate(todo, 1):
+            progress[entry_id] = f"Reading scanned page {n} of {len(todo)}"
+            started = time.perf_counter()
+            image = base64.b64encode(page_image_png(path, page)).decode()
+            texts[page] = clean_pdf_text(client.vision(model, prompt, image))
+            log.info("OCR %s page %d with %s: %d chars in %.1fs", doc["name"], page, model, len(texts[page]),
+                     time.perf_counter() - started)
+        progress.pop(entry_id, None)
+        return sorted(texts.items())
+
     def process(entry_id: int):
         entry = store.entry(entry_id)
         if not entry:
@@ -164,26 +220,27 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             doc = store.document(entry["document_id"])
             pages = store.pages(doc["id"])
             if pages is None:
-                pages = extract(file_path(doc))
+                pages = read_with_ocr(entry_id, doc)
                 store.set_pages(doc["id"], pages, sum(word_count(t) for _, t in pages))
             size, overlap = settings["chunk_size"], settings["chunk_overlap"]
             chunks = chunk_sections(pages, size, overlap)
             if not chunks:
-                raise ValueError("No text found. Scanned PDFs need OCR, which is not supported yet.")
+                raise ValueError("No text found. This looks like a scanned document or image: install an OCR model "
+                                 "(Settings → Reading scanned pages) and re-index it.")
             ids = store.replace_chunks(entry_id, chunks)
             embed_model = None
             try:
                 client = ollama()
-                model = installed(settings["embed_model"], client.models())
+                model = resolve_embed_model(client, installed_models(client))
                 if model:
                     prefix = prefixes(model)[1]
                     for i in range(0, len(chunks), 32):
                         # Contextual chunk header: the section path is embedded with the passage text.
                         batch = [prefix + (f"{sec}\n" if sec else "") + text for _, text, sec in chunks[i:i + 32]]
                         store.set_embeddings(ids[i:i + 32], client.embed(model, batch, embed_ctx(client, model)))
-                    embed_model = settings["embed_model"]
+                    embed_model = bare(model)
                 else:
-                    log.info("embedding model %s not installed; %s is keyword-only", settings["embed_model"], doc["name"])
+                    log.info("no search model installed; %s is keyword-only", doc["name"])
             except Exception as e:  # Ollama down or embedding failed: keyword search still works.
                 log.warning("embedding skipped for %s: %s", doc["name"], e)
             store.set_entry(entry_id, status="ready", chunks=len(chunks), embed_model=embed_model,
@@ -193,6 +250,8 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         except Exception as e:
             log.exception("indexing failed for entry %s", entry_id)
             store.set_entry(entry_id, status="error", error=str(e))
+        finally:
+            progress.pop(entry_id, None)
 
     def queue(entry_id: int):
         store.set_entry(entry_id, status="queued", error=None)
@@ -231,6 +290,15 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         sizes.update({m["name"]: m.get("size", 0) for m in listing})
         return [m["name"] for m in listing]
 
+    def resolve_embed_model(client, models: list[str]) -> str | None:
+        """Configured search model if installed, else the largest installed embedding model."""
+        chosen = installed(settings["embed_model"], models)
+        if chosen:
+            return chosen
+        embedders = [m for m in models if "embedding" in model_meta(client, m)["capabilities"]
+                     or (not model_meta(client, m)["capabilities"] and "embed" in m)]
+        return max(embedders, key=lambda m: sizes.get(m, 0), default=None)
+
     def resolve_chat_model(models: list[str], client=None) -> str | None:
         chosen = installed(settings["chat_model"], models)
         if chosen:
@@ -252,9 +320,16 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             info["chat_models"] = [m for m in info["models"] if can_chat(client, m)]
             info["embed_models"] = [m for m in info["models"] if "embedding" in model_meta(client, m)["capabilities"]
                                     or (not model_meta(client, m)["capabilities"] and "embed" in m)]
-            info["embed_ready"] = bool(installed(settings["embed_model"], info["models"]))
+            info["embed_active"] = bare(resolve_embed_model(client, info["models"]))
+            info["embed_ready"] = info["embed_active"] is not None
+            info["ocr_active"] = resolve_ocr_model(client, info["models"])
+            loaded = [m for m in client.running() if m["size"]]
+            # "cpu": a loaded model has nothing in GPU memory -> every answer is computed on the processor.
+            info["compute"] = (None if not loaded else "cpu" if all(m["size_vram"] == 0 for m in loaded)
+                               else "gpu" if all(m["size_vram"] >= m["size"] for m in loaded) else "partial")
+            info["vision_models"] = [m for m in info["models"] if "vision" in model_meta(client, m)["capabilities"]]
             embed_cache.update(at=time.time(), key=(settings["ollama_url"], settings["embed_model"]),
-                               ready=info["embed_ready"])
+                               model=info["embed_active"])
         except Exception as e:
             info["error"] = str(e)
         info["stale_entries"] = sum(1 for e in store.all("SELECT * FROM entries WHERE status = 'ready'") if is_stale(e))
@@ -372,7 +447,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         for e in entries:
             e["stale"] = e["status"] == "ready" and is_stale(e)
         return {**col, **readiness(entries), "entries": entries, "vectors": vectors,
-                "chunks": sum(e["chunks"] for e in entries), "embed_model": settings["embed_model"],
+                "chunks": sum(e["chunks"] for e in entries), "embed_model": active_embed() or settings["embed_model"],
                 "embed_ready": embed_ready()}
 
     @app.post("/api/collections/{cid}/optimize")
@@ -387,7 +462,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             store.db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('optimize')")
             store.db.execute("ANALYZE")
             store.db.commit()
-        vectors = retriever.warm(cid, settings["embed_model"])
+        vectors = retriever.warm(cid, active_embed() or settings["embed_model"])
         store.run("UPDATE collections SET optimized = ? WHERE id = ?", (time.time(), cid))
         log.info("optimized collection %s: %d re-queued, %d vectors cached", cid, requeued, vectors)
         return {"requeued": requeued, "vectors_cached": vectors}
@@ -412,7 +487,12 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
 
     @app.get("/api/documents")
     def list_documents(collection_id: int | None = None, type: str | None = None):
-        return store.documents(collection_id, type)
+        docs = store.documents(collection_id, type)
+        for d in docs:
+            for e in d["entries"]:
+                if e["id"] in progress:
+                    e["progress"] = progress[e["id"]]
+        return docs
 
     @app.post("/api/documents")
     async def upload(files: list[UploadFile], collection_ids: list[int] = Form(...)):
@@ -535,27 +615,28 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         ctx = model_meta(client, model)["context_length"]
         return min(ctx, 8192) if ctx else None
 
-    def query_vector(client, models, text):
-        model = installed(settings["embed_model"], models)
+    def query_vector(client, models, text) -> tuple[list | None, str | None]:
+        """(vector, stored model name) for a question, or (None, None) without a search model."""
+        model = resolve_embed_model(client, models)
         if not model:
-            return None
+            return None, None
         try:
-            return client.embed(model, [prefixes(model)[0] + text], embed_ctx(client, model))[0]
+            return client.embed(model, [prefixes(model)[0] + text], embed_ctx(client, model))[0], bare(model)
         except Exception as e:
             log.warning("query embedding failed: %s", e)
-            return None
+            return None, None
 
     @app.get("/api/search")
     def search(q: str, collection_id: int | None = None, limit: int = 20):
         need(q.strip(), 400, "Type something to search for")
-        vec = None
+        vec, emb = None, None
         try:
             client = ollama()
-            vec = query_vector(client, client.models(), q)
+            vec, emb = query_vector(client, installed_models(client), q)
         except Exception as e:
             log.warning("search without embeddings: %s", e)
         results, info = retriever.search(q, collection_id, max(1, min(limit, 50)), max(settings["scan_k"], limit),
-                                         vec, settings["embed_model"], settings["rerank"])
+                                         vec, emb, settings["rerank"])
         return {"results": results, "mode": "hybrid" if vec is not None else "keyword", **info}
 
     # --- chats --------------------------------------------------------------------
@@ -644,11 +725,11 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                 model = resolve_chat_model(models, client)
                 if not model:
                     raise RuntimeError("No chat model is installed in Ollama. Open Settings to add one.")
-                vec = query_vector(client, models, question)
+                vec, emb = query_vector(client, models, question)
                 timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
                 t1 = time.perf_counter()
                 sources, info = retriever.search(question, scope, settings["top_k"],
-                                                 settings["scan_k"], vec, settings["embed_model"], settings["rerank"])
+                                                 settings["scan_k"], vec, emb, settings["rerank"])
                 timings["search_ms"] = round((time.perf_counter() - t1) * 1000)
                 files = list(dict.fromkeys(e["document"] for e in store.entries(collection_id=scope)))
                 found = len(sources)

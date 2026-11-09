@@ -221,6 +221,7 @@ async function refreshStatus() {
   else if (!s.chat_model) pill.innerHTML = `<span class="dot warn"></span><span>No chat model</span>`;
   else if (strip(s.chat_model) !== strip(s.settings.chat_model)) pill.innerHTML = `<span class="dot warn"></span><span>${esc(s.chat_model)} (fallback)</span>`;
   else pill.innerHTML = `<span class="dot ok"></span><span>${esc(s.chat_model)}</span>`;
+  if (s.ollama && s.compute === "cpu") pill.innerHTML = pill.innerHTML.replace('dot ok', 'dot warn').replace("</span>" + esc(s.chat_model), "</span>" + esc(s.chat_model) + " · CPU only");
   pill.title = s.ollama ? `Ollama ${s.ollama_version} · ${s.embed_ready ? "semantic + keyword search" : "keyword search only"}` : (s.error || "");
   return s;
 }
@@ -553,10 +554,13 @@ async function renderSettings() {
     <div class="cols"><div>
       <div class="panel"><h2>AI model</h2>
         <div class="pill" style="margin-bottom:14px">${s.ollama ? `<span class="dot ok"></span>Ollama ${esc(s.ollama_version)} is running` : `<span class="dot err"></span>Ollama is not reachable`}</div>
+        ${s.compute === "cpu" ? `<p class="sub err-text" style="margin-top:-6px">Ollama is running models on the <b>processor only</b> (nothing in GPU memory), so answers and scanned-page reading are slow. If this computer has a graphics card, reinstall Ollama with its GPU libraries (see Help).</p>`
+          : s.compute === "partial" ? `<p class="sub" style="margin-top:-6px">The model only partly fits in GPU memory; a smaller model or shorter context will be faster.</p>` : ""}
         <div class="field"><label>Chat model</label><select data-setting="chat_model">${opts(chatModels, cfg.chat_model)}</select>
           <span class="hint">${s.chat_model && !has(cfg.chat_model) ? `Not installed, so Daftar is answering with <b>${esc(s.chat_model)}</b>. ` : ""}Larger models answer better but need more memory.</span></div>
         <div class="field"><label>Search model (embeddings)</label><select data-setting="embed_model">${opts(embedModels, cfg.embed_model)}</select>
-          <span class="hint">${s.embed_ready ? "Semantic search is on." : "Not installed: search matches words only, not meaning."}</span></div>
+          <span class="hint">${!s.embed_ready ? "No search model installed: search matches words only, not meaning."
+            : s.embed_active !== cfg.embed_model.replace(/:latest$/, "") ? `Not installed, so Daftar uses <b>${esc(s.embed_active)}</b> for meaning-based search.` : "Meaning-based search is on."}</span></div>
         <div class="field"><label>Download a model</label><div class="row"><input type="text" id="pullName" placeholder="e.g. gemma3:1b or nomic-embed-text" style="flex:1">
           <button class="btn" data-act="pull">Download</button></div>
           <span class="hint">This is the one action that uses the internet: Ollama fetches the model from its library. Your documents are never sent.</span>
@@ -573,6 +577,9 @@ async function renderSettings() {
       </div></div>
     <div>
       <div class="panel"><h2>Reading documents</h2>
+        <div class="field"><label>Reading scanned pages (OCR model)</label><select data-setting="ocr_model">${opts(s.vision_models || [], cfg.ocr_model)}</select>
+          <span class="hint">${s.ocr_active ? (s.ocr_active.replace(/:latest$/, "") === cfg.ocr_model.replace(/:latest$/, "") ? "Scanned PDF pages and photos are read with this model." : `Not installed, so Daftar uses <b>${esc(s.ocr_active)}</b>.`)
+            : "No vision model installed: scanned PDF pages and photos cannot be read yet. PaddleOCR-VL is small and strong for Arabic and English."}</span></div>
         ${num("chunk_size", "Text block size", "Characters per passage (200–4000). Smaller blocks give more precise sources.", 200, 4000, 50)}
         ${num("chunk_overlap", "Text block overlap", "Characters shared between neighbouring blocks, so sentences are not cut off.", 0, 1000, 10)}
         ${s.stale_entries ? `<p class="sub">${plural(s.stale_entries, "document index")} use older settings or no search model.</p><button class="btn" data-act="reindex-all">Re-index now</button>` : '<p class="hint">All documents use the current settings.</p>'}
@@ -650,7 +657,9 @@ async function renderHelp() {
         <li>After changing block size or the search model, use <b>Collections → Check status → Optimize search</b>.</li></ul></div>
       <div class="panel"><h2>Troubleshooting</h2><ul>
         <li><b>“Ollama not running”</b>: start Ollama, then reopen Daftar.</li>
-        <li><b>“No text found”</b>: the PDF is a scanned image. OCR is not supported yet.</li>
+        <li><b>“CPU only”</b>: Ollama found no GPU libraries. Reinstall Ollama from its official package (it includes the NVIDIA/AMD runtimes), restart it, and check that <code>ollama ps</code> shows “100% GPU”.</li>
+        <li><b>Scanned PDFs and photos</b>: install a vision model for reading text, e.g. PaddleOCR-VL, and pick it under Settings → Reading scanned pages.</li>
+
         <li><b>Model not installed</b>: download it in Settings, or run <code>ollama pull &lt;name&gt;</code>.</li></ul></div>
       <div class="panel"><h2>Privacy</h2><p class="sub" style="margin:0">Daftar runs a small server on 127.0.0.1 that only this computer can reach, and talks only to your Ollama. Nothing is uploaded, tracked or synced.</p></div>
     </div></div></div>`;

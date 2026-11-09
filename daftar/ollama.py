@@ -25,6 +25,8 @@ def check_url(url: str, allow_remote: bool = False) -> str:
 PREFIXES = {
     "nomic": ("search_query: ", "search_document: "),
     "embeddinggemma": ("task: search result | query: ", "title: none | text: "),
+    # Qwen3-Embedding model card: queries need an English instruction; documents get none.
+    "qwen3-embedding": ("Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:", ""),
 }
 
 
@@ -61,12 +63,27 @@ class Ollama:
     def models(self) -> list[str]:
         return [m["name"] for m in self.model_list()]
 
+    def running(self) -> list[dict]:
+        """Loaded models with how much of each sits in GPU memory (/api/ps: size, size_vram)."""
+        return [{"name": m.get("name"), "size": m.get("size", 0), "size_vram": m.get("size_vram", 0)}
+                for m in self.http.get("/api/ps").json().get("models", [])]
+
     def show(self, model: str) -> dict:
         """Context length and capabilities ('completion', 'embedding', ...) from /api/show."""
         d = self._post("/api/show", {"model": model})
         info = d.get("model_info") or {}
         ctx = next((v for k, v in info.items() if k.endswith(".context_length") and isinstance(v, int)), None)
-        return {"context_length": ctx, "capabilities": d.get("capabilities") or []}
+        return {"context_length": ctx, "capabilities": d.get("capabilities") or [],
+                "architecture": info.get("general.architecture", "")}
+
+    def vision(self, model: str, prompt: str, image_b64: str) -> str:
+        """One image + prompt → text (used for OCR). Long timeout: a page can take minutes without a GPU."""
+        body = {"model": model, "stream": False, "options": {"temperature": 0, "num_ctx": 8192},
+                "messages": [{"role": "user", "content": prompt, "images": [image_b64]}]}
+        r = self.http.post("/api/chat", json=body, timeout=httpx.Timeout(10.0, read=1800.0))
+        if r.status_code != 200:
+            raise OllamaError(_error_text(r.text))
+        return r.json().get("message", {}).get("content", "")
 
     def embed(self, model: str, texts: list[str], num_ctx: int | None = None) -> list[list[float]]:
         body = {"model": model, "input": texts}

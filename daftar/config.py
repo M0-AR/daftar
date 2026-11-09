@@ -8,7 +8,8 @@ DEFAULTS = {
     "ollama_url": "http://127.0.0.1:11434",
     "allow_remote_ollama": False,   # a server on another machine means documents leave this one
     "chat_model": "gemma3:1b",
-    "embed_model": "nomic-embed-text",
+    "embed_model": "qwen3-embedding:0.6b",  # multilingual incl. Arabic dialects; any installed embedder is used if missing
+    "ocr_model": "paddleocr-vl:1.6",  # reads scanned pages; any installed vision model is used if missing
     "temperature": 0.2,             # "Creativity": 0 precise .. 2 varied
     "top_k": 6,                     # passages given to the model
     "scan_k": 24,                   # candidate passages examined before picking top_k

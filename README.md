@@ -37,13 +37,14 @@ uv pip install -p .venv -e ".[desktop]"
 | Role | Default | When missing |
 |---|---|---|
 | Chat | `gemma3:1b` | first installed chat model |
-| Search (embeddings) | `nomic-embed-text` | keyword search only (SQLite FTS5) |
+| Search (embeddings) | `qwen3-embedding:0.6b` | any installed embedding model, else keyword search (SQLite FTS5) |
+| Reading scans (OCR) | `paddleocr-vl:1.6` | any installed vision model, else scans are reported as unreadable |
 
 Install from Settings → Download a model, with `ollama pull <name>`, or from a GGUF you downloaded:
 
 ```bash
 printf 'FROM ./gemma-3-1b-it-Q4_K_M.gguf\n' > Modelfile && ollama create gemma3:1b -f Modelfile
-printf 'FROM ./nomic-embed-text-v1.5.Q8_0.gguf\n' > Modelfile && ollama create nomic-embed-text -f Modelfile
+printf 'FROM ./Qwen3-Embedding-0.6B-Q8_0.gguf\n' > Modelfile && ollama create qwen3-embedding:0.6b -f Modelfile
 ```
 Then Collections → Check status → Optimize search to add semantic search to existing documents.
 
@@ -67,6 +68,8 @@ uv pip install -p .venv -e ".[dev]"
 ```
 
 ## Build a standalone app
-On each target OS: `python scripts/build.py` → `dist/Daftar/`.
+On each target OS: `python scripts/build.py` → `dist/Daftar/`, then `python scripts/smoke_build.py`.
+`dist/Daftar/Daftar --self-test` checks the bundled libraries. `.github/workflows/build.yml` builds
+and smoke-tests Windows, macOS and Linux on GitHub Actions.
 
 [Ollama]: https://ollama.com

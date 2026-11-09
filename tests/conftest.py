@@ -13,6 +13,8 @@ class FakeOllama:
     """Stands in for Ollama: deterministic bag-of-words embeddings and a canned, citing answer."""
     models_installed = ["fake-chat:latest", "nomic-embed-text:latest"]
     calls = []
+    vision_calls = []
+    loaded = []
     context_length = 32768
 
     def __init__(self, url, allow_remote=False):
@@ -30,8 +32,17 @@ class FakeOllama:
         return list(self.models_installed)
 
     def show(self, model):
-        caps = ["embedding"] if "embed" in model else ["completion"]
-        return {"context_length": self.context_length, "capabilities": caps}
+        caps = ["embedding"] if "embed" in model else ["completion", "vision"] if "ocr" in model else ["completion"]
+        return {"context_length": self.context_length, "capabilities": caps,
+                "architecture": "paddleocr" if "paddleocr" in model else "fake"}
+
+    def running(self):
+        return list(FakeOllama.loaded)
+
+    def vision(self, model, prompt, image_b64):
+        import base64 as _b64
+        FakeOllama.vision_calls.append({"model": model, "prompt": prompt, "png": _b64.b64decode(image_b64)[:8]})
+        return "Scanned clause: the warranty period is thirty-six months."
 
     def embed(self, model, texts, num_ctx=None):
         out = []
@@ -91,10 +102,17 @@ class Api:
         return [json.loads(line) for line in r.text.splitlines() if line]
 
 
+_ORIGINAL = {name: FakeOllama.__dict__[name] for name in ("show", "model_list", "chat", "embed", "pull", "vision", "running")}
+
+
 @pytest.fixture
 def fake():
+    for name, fn in _ORIGINAL.items():  # tests may patch methods on the class; start every test clean
+        setattr(FakeOllama, name, fn)
     FakeOllama.models_installed = ["fake-chat:latest", "nomic-embed-text:latest"]
     FakeOllama.calls = []
+    FakeOllama.vision_calls = []
+    FakeOllama.loaded = []
     FakeOllama.context_length = 32768
     return FakeOllama
 

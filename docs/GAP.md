@@ -32,7 +32,7 @@ artwork from that product is used; only the publicly described capabilities were
 | Streamed responses | ✅ NDJSON stream, Stop button | chat |
 | Search view, Help, collapsible sidebar | ✅ | sidebar |
 | Small talk / "which files do you have?" | ✅ file list in the prompt; unrelated passages are not cited | `rag.build_messages` |
-| Windows & macOS builds | ⚠️ PyInstaller script for each OS; only Linux built and tested here | `scripts/build.py` |
+| Windows & macOS builds | ⚠️ CI workflow builds and smoke-tests all three OSes (`.github/workflows/build.yml`); only the Linux build has been run so far | `scripts/build.py`, `scripts/smoke_build.py` |
 
 ## Beyond the reference (each measured or tested; see docs/RESEARCH.md)
 
@@ -46,6 +46,8 @@ artwork from that product is used; only the publicly described capabilities were
 | **Prompt-injection resistance** (JSON-quoted passages, control-token stripping, valid-only citations) | documents are untrusted input (OWASP LLM01) | gemma3:1b strong attack 8/8 → 0/8 |
 | **No silent truncation** (context sized per model and per script) | Ollama drops the start of oversized prompts | measured 2048 of ~6000 tokens kept before the fix |
 | **Stop really stops** (Ollama stream closed, partial answer kept) | saves compute, keeps what was written | live: saved in 0.2 s |
+| **OCR** for scanned PDFs and photos with a local vision model | the site lists no OCR | `test_scanned_pdf_is_read_with_ocr` (live run waits for a newer Ollama) |
+| **CPU-only warning** | a missing GPU runtime silently makes everything 20× slower | `test_cpu_only_ollama_is_reported` |
 | Search page, Help page, retrieval/answer/injection eval scripts | verify quality instead of claiming it | `scripts/eval_*.py` |
 
 ## Deliberately not copied
@@ -53,6 +55,6 @@ artwork from that product is used; only the publicly described capabilities were
 - Marketing copy, product name, logo, colours and taglines.
 
 ## Known limits
-- Scanned PDFs need OCR (not implemented).
+- Scanned PDFs and photos need a vision model in Ollama (PaddleOCR-VL recommended); it needs a recent Ollama and, in practice, a GPU.
 - Arabic/RTL text exports to PDF without glyph shaping (DOCX/HTML/MD/TXT are fine).
 - Match % in keyword-only mode is word coverage; it becomes meaning-aware once a search model is installed.

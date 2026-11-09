@@ -7,7 +7,10 @@ DOCUMENTS = {".pdf", ".docx", ".txt", ".md", ".markdown", ".csv", ".html", ".htm
 CODE = {".py", ".js", ".mjs", ".ts", ".tsx", ".jsx", ".java", ".kt", ".go", ".rs", ".c", ".h", ".cpp", ".hpp",
         ".cs", ".rb", ".php", ".swift", ".scala", ".sql", ".sh", ".ps1", ".r", ".m", ".lua", ".dart", ".vue",
         ".json", ".yaml", ".yml", ".toml", ".ini", ".xml", ".css", ".scss", ".ipynb"}
-SUPPORTED = DOCUMENTS | CODE
+IMAGES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+SUPPORTED = DOCUMENTS | CODE | IMAGES
+MIN_PAGE_TEXT = 20  # a PDF page with fewer non-space characters is treated as a scan
+OCR_LONG_SIDE = 1600  # pixels; enough for body text at A4 without huge image token counts
 WORDS = re.compile(r"\w+", re.UNICODE)
 
 
@@ -72,6 +75,8 @@ def extract(path: Path) -> list[tuple[int, str]]:
         for table in d.tables:
             parts += [" | ".join(c.text for c in row.cells) for row in table.rows]
         return [(1, "\n".join(parts))]
+    if ext in IMAGES:
+        return [(1, "")]  # text comes from OCR
     if ext in (".html", ".htm"):
         return [(1, html_text(path.read_text(encoding="utf-8", errors="replace")))]
     if ext == ".ipynb":
@@ -104,6 +109,38 @@ def heading_of(line: str) -> tuple[int, str] | None:
         if m:
             return make(m)
     return None
+
+
+def scanned_pages(pages: list[tuple[int, str]], ext: str) -> list[int]:
+    """Page numbers that need OCR: images always, PDF pages without a usable text layer."""
+    if ext in IMAGES:
+        return [1]
+    if ext != ".pdf":
+        return []
+    return [p for p, t in pages if len("".join(t.split())) < MIN_PAGE_TEXT]
+
+
+def page_image_png(path: Path, page: int) -> bytes:
+    """Render a PDF page (or load an image) as PNG, long side scaled to OCR_LONG_SIDE."""
+    import io
+
+    from PIL import Image
+    if path.suffix.lower() == ".pdf":
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(str(path))
+        try:
+            pdf_page = pdf[page - 1]
+            width, height = pdf_page.get_size()
+            image = pdf_page.render(scale=OCR_LONG_SIDE / max(width, height)).to_pil()
+        finally:
+            pdf.close()
+    else:
+        image = Image.open(path)
+        image.load()
+        image.thumbnail((OCR_LONG_SIDE, OCR_LONG_SIDE))
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="PNG")
+    return buf.getvalue()
 
 
 def chunk_pages(pages: list[tuple[int, str]], size: int = 1000, overlap: int = 150) -> list[tuple[int, str]]:
