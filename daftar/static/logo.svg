@@ -1,13 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6d6ff7"/><stop offset="1" stop-color="#22c3e6"/>
-    </linearGradient>
-    <linearGradient id="vee" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7fe3ff"/><stop offset="1" stop-color="#4f7cf7"/>
+    <linearGradient id="cover" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0f766e"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="#1a2140"/>
-  <path d="M32 8 52 19.5v25L32 56 12 44.5v-25Z" fill="#141a33" stroke="url(#edge)" stroke-width="3" stroke-linejoin="round"/>
-  <path d="M21 22h7l4 12 4-12h7l-8.5 21h-5Z" fill="url(#vee)"/>
+  <rect x="10" y="6" width="44" height="52" rx="7" fill="url(#cover)"/>
+  <rect x="10" y="6" width="9" height="52" rx="4" fill="#0b4f4a" opacity=".55"/>
+  <path d="M25 20h21M25 28h21M25 36h14" stroke="#ecfdf5" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M40 6h9v19l-4.5-3.6L40 25z" fill="#fbbf24"/>
 </svg>

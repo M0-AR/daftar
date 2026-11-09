@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,31 +8,35 @@
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
   <aside class="side">
     <div class="brand">
-      <img src="logo.svg" alt="" width="34" height="34">
-      <div><div class="brand-name">DAFTAR</div><div class="brand-tag">Your documents. Your rules.</div></div>
+      <img src="logo.svg" alt="" width="32" height="32">
+      <div class="brand-text"><div class="brand-name">Daftar</div><div class="brand-tag">private document chat</div></div>
+      <button class="icon-btn collapse" id="collapse" title="Collapse sidebar"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
     </div>
-    <button class="btn primary block" id="newChat">+ New chat</button>
+    <button class="btn primary block" id="newChat" title="New chat"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span>New chat</span></button>
     <nav class="nav">
-      <button data-view="chat"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>Chat</button>
-      <button data-view="collections"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/></svg>Collections</button>
-      <button data-view="documents"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6"/></svg>Documents</button>
-      <button data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg>Settings</button>
+      <button data-view="chat" title="Chat"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg><span>Chat</span></button>
+      <button data-view="search" title="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span>Search</span></button>
+      <button data-view="documents" title="Documents"><svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h6"/></svg><span>Documents</span></button>
+      <button data-view="collections" title="Collections"><svg viewBox="0 0 24 24"><path d="M3 7h7l2 2h9v10H3z"/></svg><span>Collections</span></button>
     </nav>
-    <div class="side-label">Recent chats</div>
+    <div class="chat-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><input id="chatSearch" type="search" placeholder="Search conversations…"></div>
     <div class="chat-list" id="chatList"></div>
     <div class="side-foot">
-      <div id="statusPill" class="pill">Checking Ollama…</div>
-      <div class="privacy"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>100% local · zero telemetry</div>
+      <div id="statusPill" class="pill" title="">Checking Ollama…</div>
+      <nav class="nav">
+        <button data-view="settings" title="Settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg><span>Settings</span></button>
+        <button data-view="help" title="Help"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/></svg><span>Help</span></button>
+      </nav>
     </div>
   </aside>
   <main id="main"></main>
 </div>
-<div id="modal" class="modal" hidden><div class="modal-box" id="modalBox"></div></div>
+<div id="modal" class="modal" hidden><div class="modal-box" id="modalBox" role="dialog" aria-modal="true"></div></div>
 <div id="toast" class="toast" hidden></div>
-<input type="file" id="filePick" multiple accept=".pdf,.docx,.txt,.md,.csv" hidden>
+<input type="file" id="filePick" multiple accept=".pdf,.docx,.txt,.md,.markdown,.csv" hidden>
 <script src="app.js"></script>
 </body>
 </html>

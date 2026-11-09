@@ -2,7 +2,12 @@
 import re
 from pathlib import Path
 
-SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".csv"}
+SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".markdown", ".csv"}
+WORDS = re.compile(r"\w+", re.UNICODE)
+
+
+def word_count(text: str) -> int:
+    return len(WORDS.findall(text))
 
 
 def extract(path: Path) -> list[tuple[int, str]]:

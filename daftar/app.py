@@ -8,6 +8,7 @@ import webbrowser
 
 import uvicorn
 
+from daftar import APP_NAME
 from daftar.server import create_app
 
 
@@ -18,7 +19,7 @@ def free_port() -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="daftar", description="Private AI document intelligence.")
+    parser = argparse.ArgumentParser(prog="daftar", description="Private document chat on your own computer.")
     parser.add_argument("--port", type=int, default=0, help="loopback port (default: any free port)")
     parser.add_argument("--browser", action="store_true", help="open in the web browser instead of a window")
     parser.add_argument("--headless", action="store_true", help="only run the local server")
@@ -34,7 +35,7 @@ def main():
     thread.start()
     while not server.started:
         time.sleep(0.05)
-    print(f"Daftar running at {url}", flush=True)
+    print(f"{APP_NAME} running at {url}", flush=True)
 
     if not args.headless and not args.browser:
         try:
@@ -42,8 +43,9 @@ def main():
         except ImportError:
             print("pywebview not installed; opening the browser instead.")
         else:
-            webview.create_window("Daftar", url, width=1320, height=860, min_size=(900, 600),
-                                  background_color="#14161f")
+            webview.settings["ALLOW_DOWNLOADS"] = True  # document exports
+            webview.create_window(APP_NAME, url, width=1320, height=860, min_size=(900, 600),
+                                  background_color="#101418")
             webview.start()
             server.should_exit = True
             return

@@ -1,7 +1,7 @@
 [project]
 name = "daftar"
-version = "0.1.0"
-description = "Private AI document intelligence. Nothing leaves the device."
+version = "0.2.0"
+description = "Private document chat that runs entirely on your computer."
 requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115",
@@ -10,12 +10,13 @@ dependencies = [
   "python-multipart>=0.0.9",
   "pypdf>=5.0",
   "python-docx>=1.1",
+  "fpdf2>=2.7",
   "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
 desktop = ["pywebview>=5.0"]
-dev = ["pytest>=8", "fpdf2>=2.7", "pyinstaller>=6.0"]
+dev = ["pytest>=8", "pyinstaller>=6.0"]
 
 [project.scripts]
 daftar = "daftar.app:main"
@@ -31,5 +32,6 @@ include = ["daftar*"]
 daftar = ["static/*"]
 
 [tool.pytest.ini_options]
-markers = ["live: needs a running local Ollama with the configured models"]
+markers = ["live: needs a running local Ollama with an installed chat model"]
 addopts = "-m 'not live'"
+filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]

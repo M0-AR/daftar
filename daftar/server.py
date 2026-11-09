@@ -1,25 +1,41 @@
-"""Local HTTP API + static UI. Binds to loopback only; talks to nothing but the local Ollama."""
+"""Local HTTP API + static UI. Binds to loopback; talks only to the configured Ollama server."""
+import collections as pycollections
 import hashlib
 import json
 import logging
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from daftar import __version__
+from daftar import APP_NAME, __version__
 from daftar.config import Settings, data_dir
-from daftar.ingest import SUPPORTED, chunk_pages, extract
-from daftar.ollama import LOOPBACK, Ollama, check_local, prefixes
+from daftar.exporter import FORMATS, export
+from daftar.ingest import SUPPORTED, chunk_pages, extract, word_count
+from daftar.ollama import LOOPBACK, Ollama, check_url, prefixes
 from daftar.rag import Retriever, build_messages
 from daftar.store import Store
 
 log = logging.getLogger("daftar")
 STATIC = Path(__file__).parent / "static"
+READ_WPM = 200
+
+
+class RingLog(logging.Handler):
+    """Keeps the last N log lines in memory for the in-app debug view (never written anywhere else)."""
+
+    def __init__(self, size=400):
+        super().__init__()
+        self.lines = pycollections.deque(maxlen=size)
+        self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
+
+    def emit(self, record):
+        self.lines.append(self.format(record))
 
 
 def installed(name: str, models: list[str]) -> str | None:
@@ -37,11 +53,24 @@ class CollectionIn(BaseModel):
 
 class ChatIn(BaseModel):
     collection_id: int | None = None
-    title: str = "New chat"
+    title: str | None = None
 
 
 class AskIn(BaseModel):
-    question: str
+    question: str = ""
+    resend: bool = False
+
+
+class MessageEdit(BaseModel):
+    content: str
+
+
+class AddToCollections(BaseModel):
+    collection_ids: list[int]
+
+
+class PullIn(BaseModel):
+    name: str
 
 
 def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
@@ -52,27 +81,61 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
     settings = Settings(home / "settings.json")
     retriever = Retriever(store)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
-    app = FastAPI(title="Daftar", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
-    app.state.store, app.state.worker = store, worker
+    ring = RingLog()
+    for old in [h for h in log.handlers if isinstance(h, RingLog)]:
+        log.removeHandler(old)
+    log.addHandler(ring)
+    log.setLevel(logging.DEBUG)
+    app = FastAPI(title=APP_NAME, version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.store, app.state.worker, app.state.settings = store, worker, settings
 
     def ollama():
-        return ollama_factory(settings["ollama_url"])
+        return ollama_factory(settings["ollama_url"], settings["allow_remote_ollama"])
 
     def file_path(doc: dict) -> Path:
         return files_dir / f"{doc['id']}{doc['ext']}"
 
-    # --- ingestion ----------------------------------------------------------
-    def process(doc_id: int):
-        doc = store.document(doc_id)
-        if not doc:
+    embed_cache = {"at": 0.0, "key": None, "ready": False}
+
+    def embed_ready() -> bool:
+        """Is the configured search model installed? Cached briefly so list views don't hammer Ollama."""
+        key = (settings["ollama_url"], settings["embed_model"])
+        if embed_cache["key"] != key or time.time() - embed_cache["at"] > 10:
+            try:
+                embed_cache["ready"] = bool(installed(settings["embed_model"], ollama().models()))
+            except Exception:
+                embed_cache["ready"] = False
+            embed_cache.update(at=time.time(), key=key)
+        return embed_cache["ready"]
+
+    def is_stale(entry: dict) -> bool:
+        """Would re-indexing change this entry? (Missing vectors only count if the search model is installed.)"""
+        if entry["chunk_size"] != settings["chunk_size"] or entry["chunk_overlap"] != settings["chunk_overlap"]:
+            return True
+        return entry["embed_model"] != settings["embed_model"] and embed_ready()
+
+    def need(cond, code: int, msg: str):
+        if not cond:
+            raise HTTPException(code, msg)
+
+    # --- ingestion ------------------------------------------------------------
+    def process(entry_id: int):
+        entry = store.entry(entry_id)
+        if not entry:
             return
-        store.set_document(doc_id, status="processing", error=None)
+        store.set_entry(entry_id, status="processing", error=None)
+        started = time.perf_counter()
         try:
-            pages = extract(file_path(doc))
-            chunks = chunk_pages(pages)
+            doc = store.document(entry["document_id"])
+            pages = store.pages(doc["id"])
+            if pages is None:
+                pages = extract(file_path(doc))
+                store.set_pages(doc["id"], pages, sum(word_count(t) for _, t in pages))
+            size, overlap = settings["chunk_size"], settings["chunk_overlap"]
+            chunks = chunk_pages(pages, size, overlap)
             if not chunks:
                 raise ValueError("No text found. Scanned PDFs need OCR, which is not supported yet.")
-            ids = store.replace_chunks(doc_id, chunks)
+            ids = store.replace_chunks(entry_id, chunks)
             embed_model = None
             try:
                 client = ollama()
@@ -83,47 +146,37 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                         batch = [prefix + text for _, text in chunks[i:i + 32]]
                         store.set_embeddings(ids[i:i + 32], client.embed(model, batch))
                     embed_model = settings["embed_model"]
-            except Exception as e:  # Ollama down or embed failed: keep keyword search working.
-                log.warning("embedding skipped for document %s: %s", doc_id, e)
-            store.set_document(doc_id, status="ready", pages=len(pages), chunks=len(chunks),
-                               embed_model=embed_model)
+                else:
+                    log.info("embedding model %s not installed; %s is keyword-only", settings["embed_model"], doc["name"])
+            except Exception as e:  # Ollama down or embedding failed: keyword search still works.
+                log.warning("embedding skipped for %s: %s", doc["name"], e)
+            store.set_entry(entry_id, status="ready", chunks=len(chunks), embed_model=embed_model,
+                            chunk_size=size, chunk_overlap=overlap)
+            log.info("indexed %s into %s: %d passages in %.2fs", doc["name"], entry["collection_id"], len(chunks),
+                     time.perf_counter() - started)
         except Exception as e:
-            log.exception("ingest failed for document %s", doc_id)
-            store.set_document(doc_id, status="error", error=str(e))
+            log.exception("indexing failed for entry %s", entry_id)
+            store.set_entry(entry_id, status="error", error=str(e))
 
-    for doc in store.all("SELECT id FROM documents WHERE status IN ('queued', 'processing')"):
-        worker.submit(process, doc["id"])  # resume work interrupted by a previous shutdown
+    def queue(entry_id: int):
+        store.set_entry(entry_id, status="queued", error=None)
+        worker.submit(process, entry_id)
 
-    # --- guards --------------------------------------------------------------
+    for e in store.all("SELECT id FROM entries WHERE status IN ('queued', 'processing')"):
+        worker.submit(process, e["id"])  # resume work interrupted by a previous shutdown
+
+    # --- guards ----------------------------------------------------------------
     @app.middleware("http")
     async def local_only(request: Request, call_next):
         host = (request.url.hostname or "").strip("[]")
         if host not in LOOPBACK:  # also blocks DNS-rebinding pages that resolve to 127.0.0.1
-            return JSONResponse({"detail": "Daftar only answers on this machine"}, status_code=403)
+            return JSONResponse({"detail": f"{APP_NAME} only answers on this computer"}, status_code=403)
         # Browsers cannot send a custom header cross-origin without a CORS preflight, which we never grant.
         if request.method not in ("GET", "HEAD") and request.headers.get("x-daftar") != "1":
             return JSONResponse({"detail": "Missing X-Daftar header"}, status_code=403)
         return await call_next(request)
 
-    # --- status & settings ---------------------------------------------------
-    @app.get("/api/status")
-    def status():
-        info = {"version": __version__, "settings": settings.values, "ollama": False, "models": [],
-                "chat_model": None, "embed_ready": False, "data_dir": str(home)}
-        try:
-            client = ollama()
-            info["ollama_version"] = client.version()
-            info["models"] = client.models()
-            info["ollama"] = True
-            info["chat_model"] = resolve_chat_model(info["models"])
-            info["embed_ready"] = bool(installed(settings["embed_model"], info["models"]))
-        except Exception as e:
-            info["error"] = str(e)
-        info["stale_documents"] = store.one(
-            "SELECT COUNT(*) AS n FROM documents WHERE status = 'ready' AND COALESCE(embed_model, '') != ?",
-            (settings["embed_model"],))["n"]
-        return info
-
+    # --- status, settings, models, logs -----------------------------------------------
     def resolve_chat_model(models: list[str]) -> str | None:
         chosen = installed(settings["chat_model"], models)
         if chosen:
@@ -131,16 +184,72 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         chat_capable = [m for m in models if "embed" not in m]
         return chat_capable[0] if chat_capable else None
 
+    @app.get("/api/status")
+    def status():
+        info = {"app": APP_NAME, "version": __version__, "settings": settings.values, "ollama": False,
+                "models": [], "chat_model": None, "embed_ready": False, "data_dir": str(home)}
+        try:
+            client = ollama()
+            info["ollama_version"] = client.version()
+            info["models"] = client.models()
+            info["ollama"] = True
+            info["chat_model"] = resolve_chat_model(info["models"])
+            info["embed_ready"] = bool(installed(settings["embed_model"], info["models"]))
+            embed_cache.update(at=time.time(), key=(settings["ollama_url"], settings["embed_model"]),
+                               ready=info["embed_ready"])
+        except Exception as e:
+            info["error"] = str(e)
+        info["stale_entries"] = sum(1 for e in store.all("SELECT * FROM entries WHERE status = 'ready'") if is_stale(e))
+        return info
+
     @app.put("/api/settings")
     def put_settings(changes: dict):
+        allow = changes.get("allow_remote_ollama", settings["allow_remote_ollama"])
+        allow = allow if isinstance(allow, bool) else str(allow).lower() in ("1", "true", "on", "yes")
         if "ollama_url" in changes:
             try:
-                changes["ollama_url"] = check_local(str(changes["ollama_url"]))
+                changes["ollama_url"] = check_url(str(changes["ollama_url"]), allow)
             except ValueError as e:
                 raise HTTPException(400, str(e))
-        if "top_k" in changes:
-            changes["top_k"] = max(1, min(20, int(changes["top_k"])))
+        elif not allow:
+            try:
+                check_url(settings["ollama_url"], False)
+            except ValueError:
+                changes["ollama_url"] = "http://127.0.0.1:11434"  # turning remote off snaps back to local
+        log.info("settings changed: %s", ", ".join(sorted(changes)))
         return settings.update(changes)
+
+    @app.post("/api/settings/reset")
+    def reset_settings():
+        log.info("settings reset to defaults")
+        return settings.reset()
+
+    @app.get("/api/models")
+    def list_models():
+        try:
+            return ollama().model_list()
+        except Exception as e:
+            raise HTTPException(503, f"Ollama is not reachable: {e}")
+
+    @app.post("/api/models/pull")
+    def pull_model(body: PullIn):
+        name = body.name.strip()
+        need(name and " " not in name, 400, "Enter a model name like gemma3:1b")
+        log.info("model download requested: %s", name)
+
+        def stream():
+            try:
+                for part in ollama().pull(name):
+                    yield json.dumps({k: part.get(k) for k in ("status", "total", "completed") if k in part}) + "\n"
+                yield json.dumps({"status": "success", "done": True}) + "\n"
+            except Exception as e:
+                log.warning("model download %s failed: %s", name, e)
+                yield json.dumps({"error": str(e), "done": True}) + "\n"
+        return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+    @app.get("/api/logs")
+    def logs():
+        return {"lines": list(ring.lines)}
 
     @app.get("/api/stats")
     def stats():
@@ -148,87 +257,183 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         s["db_size"] = sum(p.stat().st_size for p in home.glob("daftar.db*"))
         return s
 
-    # --- collections -----------------------------------------------------------
+    # --- collections ---------------------------------------------------------------
+    def readiness(entries: list[dict]) -> dict:
+        total = len(entries)
+        ready = sum(1 for e in entries if e["status"] == "ready" and not is_stale(e))
+        return {"total": total, "ready": ready,
+                "indexing": sum(1 for e in entries if e["status"] in ("queued", "processing")),
+                "failed": sum(1 for e in entries if e["status"] == "error"),
+                "stale": sum(1 for e in entries if e["status"] == "ready" and is_stale(e)),
+                "readiness": round(100 * ready / total) if total else None}
+
     @app.get("/api/collections")
     def list_collections():
-        return store.collections()
+        cols = store.collections()
+        by_col = {}
+        for e in store.entries():
+            by_col.setdefault(e["collection_id"], []).append(e)
+        for c in cols:
+            c.update(readiness(by_col.get(c["id"], [])))
+        return cols
 
     @app.post("/api/collections")
     def create_collection(body: CollectionIn):
         name = body.name.strip()
-        if not name:
-            raise HTTPException(400, "Name is required")
-        if store.one("SELECT id FROM collections WHERE name = ?", (name,)):
-            raise HTTPException(409, "A collection with that name already exists")
-        return {"id": store.add_collection(name, body.description.strip())}
+        need(name, 400, "Name is required")
+        need(not store.one("SELECT id FROM collections WHERE name = ?", (name,)), 409,
+             "A collection with that name already exists")
+        cid = store.run("INSERT INTO collections(name, description, created) VALUES (?,?,?)",
+                        (name, body.description.strip(), time.time()))
+        return {"id": cid}
 
     @app.patch("/api/collections/{cid}")
-    def rename_collection(cid: int, body: CollectionIn):
+    def update_collection(cid: int, body: CollectionIn):
+        need(body.name.strip(), 400, "Name is required")
+        clash = store.one("SELECT id FROM collections WHERE name = ? AND id != ?", (body.name.strip(), cid))
+        need(not clash, 409, "A collection with that name already exists")
         store.run("UPDATE collections SET name = ?, description = ? WHERE id = ?",
                   (body.name.strip(), body.description.strip(), cid))
         return {"ok": True}
 
     @app.delete("/api/collections/{cid}")
     def delete_collection(cid: int):
-        for doc in store.documents(cid):
-            file_path(doc).unlink(missing_ok=True)
+        docs = store.documents(cid)
         store.run("DELETE FROM collections WHERE id = ?", (cid,))
+        for d in docs:
+            drop_if_orphan(d["id"])
         return {"ok": True}
 
-    # --- documents ---------------------------------------------------------------
-    @app.get("/api/documents")
-    def list_documents(collection_id: int | None = None):
-        return store.documents(collection_id)
+    @app.get("/api/collections/{cid}/status")
+    def collection_status(cid: int):
+        col = store.collection(cid)
+        need(col, 404, "Collection not found")
+        entries = store.entries(collection_id=cid)
+        vectors = store.one("""SELECT COUNT(*) AS n FROM chunks ch JOIN entries e ON e.id = ch.entry_id
+                               WHERE e.collection_id = ? AND ch.embedding IS NOT NULL""", (cid,))["n"]
+        for e in entries:
+            e["stale"] = e["status"] == "ready" and is_stale(e)
+        return {**col, **readiness(entries), "entries": entries, "vectors": vectors,
+                "chunks": sum(e["chunks"] for e in entries), "embed_model": settings["embed_model"],
+                "embed_ready": embed_ready()}
 
-    @app.post("/api/collections/{cid}/documents")
-    async def upload(cid: int, files: list[UploadFile]):
-        if not store.one("SELECT id FROM collections WHERE id = ?", (cid,)):
-            raise HTTPException(404, "Collection not found")
+    @app.post("/api/collections/{cid}/optimize")
+    def optimize_collection(cid: int):
+        need(store.collection(cid), 404, "Collection not found")
+        requeued = 0
+        for e in store.entries(collection_id=cid):
+            if e["status"] == "error" or (e["status"] == "ready" and is_stale(e)):
+                queue(e["id"])
+                requeued += 1
+        with store.lock:
+            store.db.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('optimize')")
+            store.db.execute("ANALYZE")
+            store.db.commit()
+        vectors = retriever.warm(cid, settings["embed_model"])
+        store.run("UPDATE collections SET optimized = ? WHERE id = ?", (time.time(), cid))
+        log.info("optimized collection %s: %d re-queued, %d vectors cached", cid, requeued, vectors)
+        return {"requeued": requeued, "vectors_cached": vectors}
+
+    # --- documents ------------------------------------------------------------------
+    def drop_if_orphan(doc_id: int):
+        doc = store.document(doc_id)
+        if doc and not store.one("SELECT id FROM entries WHERE document_id = ?", (doc_id,)):
+            file_path(doc).unlink(missing_ok=True)
+            store.run("DELETE FROM documents WHERE id = ?", (doc_id,))
+
+    def add_entries(doc_id: int, collection_ids: list[int]) -> list[int]:
+        added = []
+        for cid in dict.fromkeys(collection_ids):
+            if store.one("SELECT id FROM entries WHERE document_id = ? AND collection_id = ?", (doc_id, cid)):
+                continue
+            eid = store.run("INSERT INTO entries(document_id, collection_id, created) VALUES (?,?,?)",
+                            (doc_id, cid, time.time()))
+            worker.submit(process, eid)
+            added.append(cid)
+        return added
+
+    @app.get("/api/documents")
+    def list_documents(collection_id: int | None = None, type: str | None = None):
+        return store.documents(collection_id, type)
+
+    @app.post("/api/documents")
+    async def upload(files: list[UploadFile], collection_ids: list[int] = Form(...)):
+        for cid in collection_ids:
+            need(store.collection(cid), 404, f"Collection {cid} not found")
         results = []
         for f in files:
             name = Path(f.filename or "file").name
             ext = Path(name).suffix.lower()
             if ext not in SUPPORTED:
-                results.append({"name": name, "skipped": f"{ext or 'this type'} is not supported"})
+                results.append({"name": name, "skipped": f"{ext or 'this file type'} is not supported"})
                 continue
             data = await f.read()
             digest = hashlib.sha256(data).hexdigest()
-            if store.one("SELECT id FROM documents WHERE collection_id = ? AND sha256 = ?", (cid, digest)):
-                results.append({"name": name, "skipped": "already in this collection"})
-                continue
-            doc_id = store.run("""INSERT INTO documents(collection_id, name, ext, size, sha256, created)
-                                  VALUES (?,?,?,?,?,?)""", (cid, name, ext, len(data), digest, time.time()))
-            (files_dir / f"{doc_id}{ext}").write_bytes(data)
-            worker.submit(process, doc_id)
-            results.append({"name": name, "id": doc_id})
+            doc = store.one("SELECT * FROM documents WHERE sha256 = ?", (digest,))
+            if not doc:
+                doc_id = store.run("INSERT INTO documents(name, ext, size, sha256, created) VALUES (?,?,?,?,?)",
+                                   (name, ext, len(data), digest, time.time()))
+                doc = store.document(doc_id)
+                file_path(doc).write_bytes(data)
+            added = add_entries(doc["id"], collection_ids)
+            if added:
+                results.append({"name": name, "id": doc["id"], "added_to": added})
+            else:
+                results.append({"name": name, "id": doc["id"], "skipped": "already in the chosen collection(s)"})
         return results
+
+    @app.get("/api/documents/{doc_id}")
+    def document_info(doc_id: int):
+        doc = store.document(doc_id)
+        need(doc, 404, "Document not found")
+        doc.pop("content", None)
+        entries = store.entries(document_id=doc_id)
+        for e in entries:
+            e["stale"] = e["status"] == "ready" and is_stale(e)
+        return {**doc, "entries": entries, "read_minutes": max(1, math.ceil(doc["words"] / READ_WPM)) if doc["words"] else 0}
+
+    @app.get("/api/documents/{doc_id}/text")
+    def document_text(doc_id: int):
+        need(store.document(doc_id), 404, "Document not found")
+        pages = store.pages(doc_id)
+        need(pages is not None, 409, "This document has not been read yet")
+        return {"pages": [{"page": p, "text": t} for p, t in pages]}
+
+    @app.get("/api/documents/{doc_id}/export")
+    def export_document(doc_id: int, format: str = "txt"):
+        doc = store.document(doc_id)
+        need(doc, 404, "Document not found")
+        need(format in FORMATS, 400, f"Format must be one of {', '.join(FORMATS)}")
+        pages = store.pages(doc_id)
+        need(pages is not None, 409, "This document has not been read yet")
+        data, media, filename = export(pages, doc["name"], format)
+        return Response(data, media_type=media, headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
     @app.get("/api/documents/{doc_id}/file")
     def open_document(doc_id: int):
         doc = store.document(doc_id)
-        if not doc:
-            raise HTTPException(404, "Document not found")
+        need(doc, 404, "Document not found")
         return FileResponse(file_path(doc), filename=doc["name"], content_disposition_type="inline")
 
     @app.get("/api/documents/{doc_id}/chunks")
-    def document_chunks(doc_id: int):
-        return store.all("SELECT id, ord, page, text FROM chunks WHERE document_id = ? ORDER BY ord", (doc_id,))
+    def document_chunks(doc_id: int, collection_id: int | None = None):
+        where, args = ("AND e.collection_id = ?", (collection_id,)) if collection_id else ("", ())
+        return store.all(f"""SELECT ch.id, ch.ord, ch.page, ch.text, e.collection_id FROM chunks ch
+                             JOIN entries e ON e.id = ch.entry_id WHERE e.document_id = ? {where}
+                             ORDER BY e.collection_id, ch.ord""", (doc_id, *args))
 
-    @app.post("/api/documents/{doc_id}/reindex")
-    def reindex(doc_id: int):
-        if not store.document(doc_id):
-            raise HTTPException(404, "Document not found")
-        store.set_document(doc_id, status="queued")
-        worker.submit(process, doc_id)
+    @app.post("/api/documents/{doc_id}/collections")
+    def add_to_collections(doc_id: int, body: AddToCollections):
+        need(store.document(doc_id), 404, "Document not found")
+        for cid in body.collection_ids:
+            need(store.collection(cid), 404, f"Collection {cid} not found")
+        return {"added_to": add_entries(doc_id, body.collection_ids)}
+
+    @app.delete("/api/collections/{cid}/documents/{doc_id}")
+    def remove_from_collection(cid: int, doc_id: int):
+        store.run("DELETE FROM entries WHERE document_id = ? AND collection_id = ?", (doc_id, cid))
+        drop_if_orphan(doc_id)
         return {"ok": True}
-
-    @app.post("/api/reindex")
-    def reindex_stale():
-        stale = store.all("SELECT id FROM documents WHERE COALESCE(embed_model, '') != ?", (settings["embed_model"],))
-        for doc in stale:
-            store.set_document(doc["id"], status="queued")
-            worker.submit(process, doc["id"])
-        return {"queued": len(stale)}
 
     @app.delete("/api/documents/{doc_id}")
     def delete_document(doc_id: int):
@@ -238,55 +443,116 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             store.run("DELETE FROM documents WHERE id = ?", (doc_id,))
         return {"ok": True}
 
-    # --- chats ---------------------------------------------------------------------
+    @app.post("/api/entries/{entry_id}/reindex")
+    def reindex_entry(entry_id: int):
+        need(store.entry(entry_id), 404, "Not found")
+        queue(entry_id)
+        return {"ok": True}
+
+    @app.post("/api/reindex")
+    def reindex_stale():
+        targets = [e for e in store.all("SELECT * FROM entries") if e["status"] == "error" or
+                   (e["status"] == "ready" and is_stale(e))]
+        for e in targets:
+            queue(e["id"])
+        return {"queued": len(targets)}
+
+    # --- search -----------------------------------------------------------------
+    def query_vector(client, models, text):
+        model = installed(settings["embed_model"], models)
+        if not model:
+            return None
+        try:
+            return client.embed(model, [prefixes(model)[0] + text])[0]
+        except Exception as e:
+            log.warning("query embedding failed: %s", e)
+            return None
+
+    @app.get("/api/search")
+    def search(q: str, collection_id: int | None = None, limit: int = 20):
+        need(q.strip(), 400, "Type something to search for")
+        vec = None
+        try:
+            client = ollama()
+            vec = query_vector(client, client.models(), q)
+        except Exception as e:
+            log.warning("search without embeddings: %s", e)
+        results, info = retriever.search(q, collection_id, max(1, min(limit, 50)), max(settings["scan_k"], limit),
+                                         vec, settings["embed_model"], settings["rerank"])
+        return {"results": results, "mode": "hybrid" if vec is not None else "keyword", **info}
+
+    # --- chats --------------------------------------------------------------------
     @app.get("/api/chats")
-    def list_chats():
-        return store.chats()
+    def list_chats(q: str = ""):
+        return store.chats(q.strip())
 
     @app.post("/api/chats")
     def create_chat(body: ChatIn):
-        return {"id": store.run("INSERT INTO chats(collection_id, title, created) VALUES (?,?,?)",
-                                (body.collection_id, body.title, time.time()))}
+        now = time.time()
+        return {"id": store.run("INSERT INTO chats(collection_id, title, created, updated) VALUES (?,?,?,?)",
+                                (body.collection_id, (body.title or "New chat").strip() or "New chat", now, now))}
 
     @app.patch("/api/chats/{chat_id}")
     def update_chat(chat_id: int, body: ChatIn):
-        store.run("UPDATE chats SET collection_id = ?, title = ? WHERE id = ?", (body.collection_id, body.title, chat_id))
+        need(store.one("SELECT id FROM chats WHERE id = ?", (chat_id,)), 404, "Chat not found")
+        if "title" in body.model_fields_set and body.title and body.title.strip():
+            store.run("UPDATE chats SET title = ? WHERE id = ?", (body.title.strip()[:120], chat_id))
+        if "collection_id" in body.model_fields_set:
+            store.run("UPDATE chats SET collection_id = ? WHERE id = ?", (body.collection_id, chat_id))
         return {"ok": True}
 
     @app.get("/api/chats/{chat_id}")
     def get_chat(chat_id: int):
-        chat = store.one("SELECT * FROM chats WHERE id = ?", (chat_id,))
-        if not chat:
-            raise HTTPException(404, "Chat not found")
-        msgs = store.messages(chat_id)
-        for m in msgs:
-            m["sources"] = json.loads(m["sources"]) if m["sources"] else []
-        return {**chat, "messages": msgs}
+        chat = store.one("""SELECT ch.*, c.name AS collection FROM chats ch
+                            LEFT JOIN collections c ON c.id = ch.collection_id WHERE ch.id = ?""", (chat_id,))
+        need(chat, 404, "Chat not found")
+        return {**chat, "messages": store.messages(chat_id)}
 
     @app.delete("/api/chats/{chat_id}")
     def delete_chat(chat_id: int):
         store.run("DELETE FROM chats WHERE id = ?", (chat_id,))
         return {"ok": True}
 
+    @app.patch("/api/messages/{msg_id}")
+    def edit_message(msg_id: int, body: MessageEdit):
+        msg = store.one("SELECT * FROM messages WHERE id = ?", (msg_id,))
+        need(msg, 404, "Message not found")
+        need(msg["role"] == "user", 400, "Only your own messages can be edited")
+        need(body.content.strip(), 400, "Message is empty")
+        with store.lock, store.db:  # editing a question discards the conversation after it
+            store.db.execute("UPDATE messages SET content = ? WHERE id = ?", (body.content.strip(), msg_id))
+            store.db.execute("DELETE FROM messages WHERE chat_id = ? AND id > ?", (msg["chat_id"], msg_id))
+        return {"ok": True}
+
+    @app.delete("/api/messages/{msg_id}")
+    def delete_message(msg_id: int):
+        store.run("DELETE FROM messages WHERE id = ?", (msg_id,))
+        return {"ok": True}
+
     @app.post("/api/chats/{chat_id}/ask")
     def ask(chat_id: int, body: AskIn):
-        chat = store.one("SELECT * FROM chats WHERE id = ?", (chat_id,))
-        question = body.question.strip()
-        if not chat:
-            raise HTTPException(404, "Chat not found")
-        if not question:
-            raise HTTPException(400, "Question is empty")
+        chat = store.one("""SELECT ch.*, c.name AS collection FROM chats ch
+                            LEFT JOIN collections c ON c.id = ch.collection_id WHERE ch.id = ?""", (chat_id,))
+        need(chat, 404, "Chat not found")
         history = [m for m in store.messages(chat_id) if m["role"] in ("user", "assistant")]
-        store.add_message(chat_id, "user", question)
-        if not history and chat["title"] == "New chat":
-            title = question if len(question) <= 60 else question[:60].rsplit(" ", 1)[0] + "…"
-            store.run("UPDATE chats SET title = ? WHERE id = ?", (title, chat_id))
+        if body.resend:  # regenerate / edited question: answer the last user message again
+            need(history and history[-1]["role"] == "user", 400, "Nothing to answer")
+            question, history = history[-1]["content"], history[:-1]
+        else:
+            question = body.question.strip()
+            need(question, 400, "Question is empty")
+            store.add_message(chat_id, "user", question)
+            if not history and chat["title"] == "New chat":
+                title = question if len(question) <= 60 else question[:60].rsplit(" ", 1)[0] + "…"
+                store.run("UPDATE chats SET title = ? WHERE id = ?", (title, chat_id))
 
         def line(obj) -> str:
             return json.dumps(obj) + "\n"
 
         def stream():
-            answer, sources = "", []
+            answer, sources, meta = "", [], {}
+            t0 = time.perf_counter()
+            timings = {}
             try:
                 if chat["collection_id"] is None:
                     raise RuntimeError("Pick a collection for this chat first.")
@@ -294,31 +560,38 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                 models = client.models()
                 model = resolve_chat_model(models)
                 if not model:
-                    raise RuntimeError("No chat model is installed in Ollama. See Settings.")
-                query_vec, embed_model = None, installed(settings["embed_model"], models)
-                if embed_model:
-                    try:
-                        query_vec = client.embed(embed_model, [prefixes(embed_model)[0] + question])[0]
-                    except Exception as e:
-                        log.warning("query embedding failed: %s", e)
-                sources = retriever.search(question, chat["collection_id"], settings["top_k"],
-                                           query_vec, settings["embed_model"])
-                yield line({"type": "meta", "model": model, "sources": sources,
-                            "mode": "hybrid" if query_vec is not None else "keyword"})
-                if not sources:
-                    answer = ("I could not find anything about that in this collection's documents. "
-                              "Try other words, or add documents on the Documents page.")
-                    yield line({"type": "token", "text": answer})
-                else:
-                    for piece in client.chat(model, build_messages(question, sources, history)):
-                        answer += piece
-                        yield line({"type": "token", "text": piece})
+                    raise RuntimeError("No chat model is installed in Ollama. Open Settings to add one.")
+                vec = query_vector(client, models, question)
+                timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
+                t1 = time.perf_counter()
+                sources, info = retriever.search(question, chat["collection_id"], settings["top_k"],
+                                                 settings["scan_k"], vec, settings["embed_model"], settings["rerank"])
+                timings["search_ms"] = round((time.perf_counter() - t1) * 1000)
+                files = [e["document"] for e in store.entries(collection_id=chat["collection_id"])]
+                messages = build_messages(question, sources, history, chat["collection"], files)
+                meta = {"model": model, "mode": "hybrid" if vec is not None else "keyword"}
+                if settings["debug"]:
+                    meta["debug"] = {**info, "temperature": settings["temperature"], "top_k": settings["top_k"],
+                                     "scan_k": settings["scan_k"], "rerank": settings["rerank"], "timings": timings,
+                                     "prompt": messages}
+                yield line({"type": "meta", "sources": sources, **meta})
+                t2 = time.perf_counter()
+                for piece in client.chat(model, messages, settings["temperature"]):
+                    if not answer and piece:
+                        timings["first_token_ms"] = round((time.perf_counter() - t2) * 1000)
+                    answer += piece
+                    yield line({"type": "token", "text": piece})
+                timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
+                log.info("answered in chat %s with %s: %d sources, %s", chat_id, model, len(sources), timings)
             except Exception as e:
                 log.warning("ask failed: %s", e)
                 yield line({"type": "error", "text": str(e)})
                 answer = answer or f"⚠ {e}"
-            msg_id = store.add_message(chat_id, "assistant", answer, json.dumps(sources))
-            yield line({"type": "done", "id": msg_id})
+            if meta.get("debug"):
+                meta["debug"]["timings"] = timings
+                meta["debug"].pop("prompt", None)  # keep stored history small
+            msg_id = store.add_message(chat_id, "assistant", answer, sources, meta)
+            yield line({"type": "done", "id": msg_id, "timings": timings if settings["debug"] else None})
 
         return StreamingResponse(stream(), media_type="application/x-ndjson")
 

@@ -1,67 +1,72 @@
 # Daftar
 
-Private AI document intelligence. Nothing leaves the device.
+Private document chat that runs entirely on your computer.
 
-A desktop app that lets you chat with contracts, reports and files fully offline. Documents are
-indexed on your computer, questions are answered by a local model through [Ollama], and every
-answer cites the passages it came from.
+Put contracts, reports and notes into collections, ask questions in plain language, and get answers
+that cite the exact passages they came from, with a match score. Everything (files, indexes, chats)
+stays in a local data folder; the app only talks to your local [Ollama].
 
-- **100% local**: the app listens only on `127.0.0.1` and talks only to your local Ollama.
-- **Zero telemetry**: no accounts, no analytics, no update checks, no CDN assets.
-- **Works offline** once models are installed.
-- **Lightweight**: about 1 GB with the default `gemma3:1b`; swap in any Ollama model in Settings.
+## Features
+- **Collections**: separate knowledge bases; one file can be in several, each with its own index.
+  Readiness %, status check and one-click "optimize search".
+- **Documents**: PDF, Word, Markdown, text, CSV; drag & drop; filters by collection and type; preview
+  with word count and reading time; export as PDF, DOCX, Markdown, text or HTML.
+- **Chat**: streamed answers, `[n]` citations, sources with match %, edit / copy / regenerate / delete
+  messages, rename chats, search all conversations.
+- **Search**: find passages without asking the AI.
+- **Settings in plain language**: creativity (0–2), passages to use / scan, text block size / overlap,
+  improve answer relevance, model picker + download, server address, debug mode with logs, dark/light,
+  reset to defaults.
+- **Private by design**: listens on 127.0.0.1 only, rejects other host names and cross-site requests,
+  no telemetry, no external assets. A non-local Ollama server needs an explicit opt-in.
+
+See [docs/GAP.md](docs/GAP.md) for the feature checklist this build was verified against.
 
 ## Run
-
-Requires Python 3.11+ and [Ollama] running locally.
+Requires Python 3.11+ and Ollama running locally.
 
 ```bash
-uv venv --system-site-packages .venv        # system site-packages: GTK/WebKit for the native window on Linux
+uv venv --system-site-packages .venv        # Linux: system GTK/WebKit for the native window
 uv pip install -p .venv -e ".[desktop]"
-.venv/bin/daftar                           # native window (falls back to the browser)
-.venv/bin/daftar --browser                 # in the web browser
-.venv/bin/daftar --headless --port 8765    # server only
+.venv/bin/daftar                            # native window (falls back to the browser)
+.venv/bin/daftar --browser                  # in the web browser
+.venv/bin/daftar --headless --port 8765     # server only
 ```
 
 ## Models
-
-| Role | Default | Fallback when missing |
+| Role | Default | When missing |
 |---|---|---|
-| Chat | `gemma3:1b` | first installed non-embedding Ollama model |
-| Embeddings | `nomic-embed-text` | keyword search only (SQLite FTS5) |
+| Chat | `gemma3:1b` | first installed chat model |
+| Search (embeddings) | `nomic-embed-text` | keyword search only (SQLite FTS5) |
 
-Install with `ollama pull <name>`, or import a GGUF you downloaded yourself:
+Install from Settings → Download a model, with `ollama pull <name>`, or from a GGUF you downloaded:
 
 ```bash
 printf 'FROM ./gemma-3-1b-it-Q4_K_M.gguf\n' > Modelfile && ollama create gemma3:1b -f Modelfile
 printf 'FROM ./nomic-embed-text-v1.5.Q8_0.gguf\n' > Modelfile && ollama create nomic-embed-text -f Modelfile
 ```
-
-Documents indexed before the embedding model existed can be re-indexed from Settings.
+Then Collections → Check status → Optimize search to add semantic search to existing documents.
 
 ## How it works
+1. **Read** (`ingest.py`): text per page (PDF) or per file; cached once per document.
+2. **Index** (`store.py`): per collection, ~1000-character overlapping passages → FTS5 keyword index +
+   normalized embeddings.
+3. **Retrieve** (`rag.py`): keyword (BM25, prefix-matched) + vector candidates, scored as
+   `0.7·similarity + 0.3·keyword coverage` → match %; optional rerank drops passages under half the best score.
+4. **Answer** (`server.py`): passages + the collection's file list go to the chat model with instructions
+   to cite `[n]` and not invent facts; tokens stream to the UI.
 
-1. **Ingest** (`daftar/ingest.py`): PDF (per page), DOCX (incl. tables), TXT, MD, CSV → ~1000-character
-   chunks that break on whitespace and overlap by ~150 characters.
-2. **Index** (`daftar/store.py`): SQLite with an FTS5 keyword index and normalized float32 embeddings.
-3. **Retrieve** (`daftar/rag.py`): BM25 keyword hits + cosine similarity, fused by reciprocal rank,
-   always scoped to one collection.
-4. **Answer** (`daftar/server.py`): the top passages go to the chat model with instructions to answer only
-   from them and cite `[n]`; tokens stream to the UI as NDJSON.
-
-Data lives in `~/.local/share/daftar` (Linux), `~/Library/Application Support/Daftar` (macOS) or
+Data folder: `~/.local/share/daftar` (Linux), `~/Library/Application Support/Daftar` (macOS),
 `%APPDATA%\Daftar` (Windows); override with `DAFTAR_HOME`.
 
 ## Test
-
 ```bash
 uv pip install -p .venv -e ".[dev]"
-.venv/bin/python -m pytest          # offline suite (fake Ollama)
+.venv/bin/python -m pytest          # offline suite with a fake Ollama
 .venv/bin/python -m pytest -m live  # end-to-end against the local Ollama
 ```
 
 ## Build a standalone app
-
-Run on each target OS: `python scripts/build.py` → `dist/Daftar/`.
+On each target OS: `python scripts/build.py` → `dist/Daftar/`.
 
 [Ollama]: https://ollama.com

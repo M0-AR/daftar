@@ -1,27 +1,31 @@
-"""The flyer's promises, as tests: nothing leaves the device, nothing is tracked."""
+"""Privacy promises, as tests: nothing leaves the device unless the user explicitly says so."""
 import re
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from daftar.ollama import check_local
+from daftar.ollama import check_url
 from daftar.server import create_app
 
 PKG = Path(__file__).resolve().parents[1] / "daftar"
 
 
-def test_ollama_must_be_loopback():
+def test_ollama_must_be_loopback_by_default():
     for ok in ("http://127.0.0.1:11434", "http://localhost:11434", "http://[::1]:11434"):
-        check_local(ok)
-    for bad in ("http://192.168.1.5:11434", "https://api.example.com", "http://127.0.0.1.evil.com"):
+        check_url(ok)
+    for bad in ("http://192.168.1.5:11434", "https://api.example.com", "http://127.0.0.1.evil.com", "ftp://127.0.0.1"):
         with pytest.raises(ValueError):
-            check_local(bad)
+            check_url(bad)
+    assert check_url("http://192.168.1.5:11434", allow_remote=True) == "http://192.168.1.5:11434"
 
 
-def test_settings_reject_remote_ollama(client):
-    r = client.put("/api/settings", json={"ollama_url": "http://10.0.0.2:11434"})
-    assert r.status_code == 400
+def test_remote_server_needs_explicit_opt_in(api):
+    assert api.c.put("/api/settings", json={"ollama_url": "http://10.0.0.2:11434"}).status_code == 400
+    r = api.c.put("/api/settings", json={"ollama_url": "http://10.0.0.2:11434", "allow_remote_ollama": True})
+    assert r.status_code == 200 and r.json()["ollama_url"] == "http://10.0.0.2:11434"
+    # turning the opt-in off snaps back to this computer
+    assert api.c.put("/api/settings", json={"allow_remote_ollama": False}).json()["ollama_url"] == "http://127.0.0.1:11434"
 
 
 def test_rejects_non_loopback_host_header(tmp_path, fake):
