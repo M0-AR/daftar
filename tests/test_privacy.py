@@ -56,3 +56,19 @@ def test_ui_is_served_locally(client):
     assert "<title>Daftar</title>" in html
     for asset in ("app.js", "app.css", "logo.svg"):
         assert client.get(f"/{asset}").status_code == 200
+
+
+def test_foreign_origin_is_rejected(tmp_path, fake):
+    """MCP transport spec: local HTTP servers MUST validate Origin and answer 403 when it is present and invalid."""
+    with TestClient(create_app(tmp_path, ollama_factory=fake), base_url="http://127.0.0.1",
+                    headers={"X-Daftar": "1"}) as c:
+        assert c.post("/api/collections", json={"name": "ok"}, headers={"Origin": "http://127.0.0.1"}).status_code == 200
+        assert c.post("/api/collections", json={"name": "x"}).status_code == 200  # non-browser clients send none
+        for bad in ("https://evil.example", "null", "http://127.0.0.1:9999", "http://localhost.evil.example"):
+            assert c.post("/api/collections", json={"name": bad}, headers={"Origin": bad}).status_code == 403, bad
+            assert c.get("/api/stats", headers={"Origin": bad}).status_code == 403, bad
+
+
+def test_every_route_is_registered_once(client):
+    seen = [(r.path, tuple(sorted(r.methods))) for r in client.app.routes if hasattr(r, "methods") and r.methods]
+    assert len(seen) == len(set(seen)), sorted(x for x in seen if seen.count(x) > 1)

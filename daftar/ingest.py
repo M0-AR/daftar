@@ -1,5 +1,6 @@
 """Turn files into page-tagged text chunks."""
 import re
+import unicodedata
 from pathlib import Path
 
 SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".markdown", ".csv"}
@@ -10,13 +11,21 @@ def word_count(text: str) -> int:
     return len(WORDS.findall(text))
 
 
+def clean_pdf_text(text: str) -> str:
+    """PDF text layers often hold ligatures (ﬁ) and Arabic presentation forms (ﻣﺮ); NFKC maps them to normal
+    letters. Words hyphenated across a line break are re-joined (only lowercase-to-lowercase, to keep
+    real compounds and list markers)."""
+    text = unicodedata.normalize("NFKC", text)
+    return re.sub(r"([a-z])-\n([a-z])", r"\1\2", text)
+
+
 def extract(path: Path) -> list[tuple[int, str]]:
     """Return [(page_number, text), ...]. Non-paged formats are one page."""
     ext = path.suffix.lower()
     if ext == ".pdf":
         from pypdf import PdfReader
         reader = PdfReader(str(path))
-        return [(i + 1, page.extract_text() or "") for i, page in enumerate(reader.pages)]
+        return [(i + 1, clean_pdf_text(page.extract_text() or "")) for i, page in enumerate(reader.pages)]
     if ext == ".docx":
         import docx
         d = docx.Document(str(path))
@@ -38,9 +47,12 @@ def chunk_pages(pages: list[tuple[int, str]], size: int = 1000, overlap: int = 1
         while start < len(text):
             end = min(start + size, len(text))
             if end < len(text):
-                cut = max(text.rfind("\n", start + size // 2, end), text.rfind(" ", start + size // 2, end))
-                if cut > start:
-                    end = cut
+                # Recursive-splitter order: paragraph, line, sentence (Latin/Arabic), then word boundary.
+                for sep in ("\n\n", "\n", ". ", "؟ ", "? ", "! ", "، ", " "):
+                    cut = text.rfind(sep, start + size // 2, end)
+                    if cut > start:
+                        end = cut + (1 if sep[0] in ".؟?!،" else 0)
+                        break
             piece = text[start:end].strip()
             if piece:
                 chunks.append((page, piece))

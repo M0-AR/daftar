@@ -112,13 +112,14 @@ function askText(title, value = "", label = "Save") {
 }
 
 // ---------- markdown-lite (escaped first, so model output can never inject HTML) ----------
-function md(text) {
+function md(text, nSources = Infinity) {
   const code = [];
   const s = esc(text).replace(/```[\w-]*\n?([\s\S]*?)(```|$)/g, (_, c) => `\u0000${code.push(c) - 1}\u0000`);
   const inline = (t) => t
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[(\d{1,2})\]/g, '<button class="cite" data-n="$1" title="Show source $1">$1</button>');
+    .replace(/\[(\d{1,2})\]/g, (m, n) => (Number(n) >= 1 && Number(n) <= nSources
+      ? `<button class="cite" data-n="${n}" title="Show source ${n}">${n}</button>` : m));
   const out = []; let list = null; let para = [];
   const flushPara = () => { if (para.length) out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; };
   const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; };
@@ -473,11 +474,11 @@ function msgHTML(m, { last = false, question = "" } = {}) {
   const meta = m.meta || {};
   const dbg = meta.debug ? `<details class="debug"><summary>Debug details</summary><pre class="code">${esc(JSON.stringify(meta.debug, null, 2))}</pre></details>` : "";
   return `<div class="msg assistant" data-id="${m.id ?? ""}"><div class="avatar"><img src="logo.svg" alt=""></div><div class="msg-body">
-      <div class="bubble">${md(m.content)}${m.error ? `<p class="err-text">⚠ ${esc(m.error)}</p>` : ""}${sourcesHTML(m.sources, question)}</div>
+      <div class="bubble">${md(m.content, (m.sources || []).length)}${m.error ? `<p class="err-text">⚠ ${esc(m.error)}</p>` : ""}${sourcesHTML(m.sources, question)}</div>
       ${m.id ? `<div class="msg-tools"><button class="icon-btn" data-act="copy-msg" title="Copy">${ICON.copy}</button>
         ${last ? `<button class="icon-btn" data-act="regen" title="Regenerate">${ICON.redo}</button>` : ""}
         <button class="icon-btn" data-act="del-msg" title="Delete">${ICON.trash}</button>
-        <span class="hint" style="align-self:center;margin-left:6px">${esc(meta.model || "")}${meta.mode ? ` · ${meta.mode} search` : ""}</span></div>` : ""}${dbg}</div></div>`;
+        <span class="hint" style="align-self:center;margin-left:6px">${esc(meta.model || "")}${meta.mode ? ` · ${meta.mode} search` : ""}${meta.stopped ? " · stopped" : ""}</span></div>` : ""}${dbg}</div></div>`;
 }
 async function streamAnswer(chatId, question, resend = false) {
   const box = $("#msgs");
@@ -490,7 +491,7 @@ async function streamAnswer(chatId, question, resend = false) {
   $("#sendBtn").textContent = "Stop";
   const m = { role: "assistant", content: "", sources: [] };
   let frame = 0;
-  const paint = () => { frame = 0; bubble.innerHTML = md(m.content); bubble.classList.add("cursor"); if (box.scrollHeight - box.scrollTop - box.clientHeight < 140) box.scrollTop = box.scrollHeight; };
+  const paint = () => { frame = 0; bubble.innerHTML = md(m.content, m.sources.length); bubble.classList.add("cursor"); if (box.scrollHeight - box.scrollTop - box.clientHeight < 140) box.scrollTop = box.scrollHeight; };
   try {
     const r = await fetch(`/api/chats/${chatId}/ask`, { method: "POST", headers: { "X-Daftar": "1", "Content-Type": "application/json" },
       body: JSON.stringify({ question: question || "", resend }), signal: ctrl.signal });
@@ -535,7 +536,8 @@ async function renderSettings() {
   const names = models.map((m) => m.name);
   const has = (n) => names.includes(n) || names.includes(n + ":latest");
   const opts = (list, cur) => [...new Set([cur, ...list])].map((n) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}${has(n) ? "" : " (not installed)"}</option>`).join("");
-  const chatModels = names.filter((n) => !n.includes("embed")), embedModels = names.filter((n) => n.includes("embed"));
+  const chatModels = s.chat_models || names.filter((n) => !n.includes("embed"));
+  const embedModels = s.embed_models || names.filter((n) => n.includes("embed"));
   const sw = (key, title, hint) => `<label class="switch"><input type="checkbox" data-setting="${key}" ${cfg[key] ? "checked" : ""}><span><b>${title}</b><br><span class="hint">${hint}</span></span></label>`;
   const num = (key, title, hint, min, max, step = 1) => `<div class="field"><label>${title}</label><input type="number" data-setting="${key}" min="${min}" max="${max}" step="${step}" value="${cfg[key]}"><span class="hint">${hint}</span></div>`;
   main.innerHTML = `<div class="page">

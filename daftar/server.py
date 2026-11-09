@@ -5,12 +5,16 @@ import json
 import logging
 import math
 import time
+import uuid
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+import anyio
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from pydantic import BaseModel
 
 from daftar import APP_NAME, __version__
@@ -18,12 +22,13 @@ from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
 from daftar.ingest import SUPPORTED, chunk_pages, extract, word_count
 from daftar.ollama import LOOPBACK, Ollama, check_url, prefixes
-from daftar.rag import Retriever, build_messages
+from daftar.rag import Retriever, fit_prompt
 from daftar.store import Store
 
 log = logging.getLogger("daftar")
 STATIC = Path(__file__).parent / "static"
 READ_WPM = 200
+MAX_UPLOAD_BYTES = 200 << 20  # per file
 
 
 class RingLog(logging.Handler):
@@ -36,6 +41,35 @@ class RingLog(logging.Handler):
 
     def emit(self, record):
         self.lines.append(self.format(record))
+
+
+class LocalOnly:
+    """Pure ASGI guard (BaseHTTPMiddleware would hide client disconnects from streaming responses,
+    so a stopped answer would keep generating; Starlette recommends pure ASGI middleware).
+
+    - Host must be loopback: blocks DNS-rebinding pages that resolve to 127.0.0.1.
+    - A present Origin must be our own page (MCP transport rule for local servers).
+    - Writes need the X-Daftar header: browsers cannot send it cross-origin without a CORS preflight,
+      which is never granted."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}
+        host = headers.get("host", "")
+        problem = None
+        if (urlsplit("//" + host).hostname or "") not in LOOPBACK:
+            problem = f"{APP_NAME} only answers on this computer"
+        elif "origin" in headers and headers["origin"] != f"{scope['scheme']}://{host}":
+            problem = "Requests from other websites are not allowed"
+        elif scope["method"] not in ("GET", "HEAD") and headers.get("x-daftar") != "1":
+            problem = "Missing X-Daftar header"
+        if problem:
+            return await JSONResponse({"detail": problem}, status_code=403)(scope, receive, send)
+        await self.app(scope, receive, send)
 
 
 def installed(name: str, models: list[str]) -> str | None:
@@ -144,7 +178,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                     prefix = prefixes(model)[1]
                     for i in range(0, len(chunks), 32):
                         batch = [prefix + text for _, text in chunks[i:i + 32]]
-                        store.set_embeddings(ids[i:i + 32], client.embed(model, batch))
+                        store.set_embeddings(ids[i:i + 32], client.embed(model, batch, embed_ctx(client, model)))
                     embed_model = settings["embed_model"]
                 else:
                     log.info("embedding model %s not installed; %s is keyword-only", settings["embed_model"], doc["name"])
@@ -166,23 +200,42 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         worker.submit(process, e["id"])  # resume work interrupted by a previous shutdown
 
     # --- guards ----------------------------------------------------------------
-    @app.middleware("http")
-    async def local_only(request: Request, call_next):
-        host = (request.url.hostname or "").strip("[]")
-        if host not in LOOPBACK:  # also blocks DNS-rebinding pages that resolve to 127.0.0.1
-            return JSONResponse({"detail": f"{APP_NAME} only answers on this computer"}, status_code=403)
-        # Browsers cannot send a custom header cross-origin without a CORS preflight, which we never grant.
-        if request.method not in ("GET", "HEAD") and request.headers.get("x-daftar") != "1":
-            return JSONResponse({"detail": "Missing X-Daftar header"}, status_code=403)
-        return await call_next(request)
+    app.add_middleware(LocalOnly)
 
     # --- status, settings, models, logs -----------------------------------------------
-    def resolve_chat_model(models: list[str]) -> str | None:
+    meta_cache = {}
+
+    digests, sizes = {}, {}
+
+    def model_meta(client, name: str) -> dict:
+        """Context length + capabilities from Ollama /api/show, cached per model digest
+        (re-creating a model under the same name changes its digest)."""
+        key = (settings["ollama_url"], name, digests.get(name, ""))
+        if key not in meta_cache:
+            try:
+                meta_cache[key] = client.show(name)
+            except Exception as e:
+                log.debug("show %s failed: %s", name, e)
+                return {"context_length": None, "capabilities": []}
+        return meta_cache[key]
+
+    def can_chat(client, name: str) -> bool:
+        caps = model_meta(client, name)["capabilities"]
+        return "completion" in caps if caps else "embed" not in name  # old Ollama: fall back to the name
+
+    def installed_models(client) -> list[str]:
+        listing = client.model_list()
+        digests.update({m["name"]: m.get("digest", "") for m in listing})
+        sizes.update({m["name"]: m.get("size", 0) for m in listing})
+        return [m["name"] for m in listing]
+
+    def resolve_chat_model(models: list[str], client=None) -> str | None:
         chosen = installed(settings["chat_model"], models)
         if chosen:
             return chosen
-        chat_capable = [m for m in models if "embed" not in m]
-        return chat_capable[0] if chat_capable else None
+        capable = [m for m in models if (can_chat(client, m) if client else "embed" not in m)]
+        # Fallback: the largest model. Measured: qwen2:0.5b obeyed an injected instruction 6/6 times, 1.5b 0/6.
+        return max(capable, key=lambda m: sizes.get(m, 0), default=None)
 
     @app.get("/api/status")
     def status():
@@ -191,9 +244,12 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         try:
             client = ollama()
             info["ollama_version"] = client.version()
-            info["models"] = client.models()
+            info["models"] = installed_models(client)
             info["ollama"] = True
-            info["chat_model"] = resolve_chat_model(info["models"])
+            info["chat_model"] = resolve_chat_model(info["models"], client)
+            info["chat_models"] = [m for m in info["models"] if can_chat(client, m)]
+            info["embed_models"] = [m for m in info["models"] if "embedding" in model_meta(client, m)["capabilities"]
+                                    or (not model_meta(client, m)["capabilities"] and "embed" in m)]
             info["embed_ready"] = bool(installed(settings["embed_model"], info["models"]))
             embed_cache.update(at=time.time(), key=(settings["ollama_url"], settings["embed_model"]),
                                ready=info["embed_ready"])
@@ -367,14 +423,29 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             if ext not in SUPPORTED:
                 results.append({"name": name, "skipped": f"{ext or 'this file type'} is not supported"})
                 continue
-            data = await f.read()
-            digest = hashlib.sha256(data).hexdigest()
-            doc = store.one("SELECT * FROM documents WHERE sha256 = ?", (digest,))
-            if not doc:
-                doc_id = store.run("INSERT INTO documents(name, ext, size, sha256, created) VALUES (?,?,?,?,?)",
-                                   (name, ext, len(data), digest, time.time()))
-                doc = store.document(doc_id)
-                file_path(doc).write_bytes(data)
+            # Stream to disk in 1 MB pieces with a running size check (never the whole file in memory).
+            tmp = files_dir / f".upload-{uuid.uuid4().hex}{ext}"
+            sha, size = hashlib.sha256(), 0
+            try:
+                with tmp.open("wb") as out:
+                    while piece := await f.read(1 << 20):
+                        size += len(piece)
+                        if size > MAX_UPLOAD_BYTES:
+                            break
+                        sha.update(piece)
+                        out.write(piece)
+                if size > MAX_UPLOAD_BYTES:
+                    results.append({"name": name, "skipped": f"larger than {MAX_UPLOAD_BYTES >> 20} MB"})
+                    continue
+                digest = sha.hexdigest()
+                doc = store.one("SELECT * FROM documents WHERE sha256 = ?", (digest,))
+                if not doc:
+                    doc_id = store.run("INSERT INTO documents(name, ext, size, sha256, created) VALUES (?,?,?,?,?)",
+                                       (name, ext, size, digest, time.time()))
+                    doc = store.document(doc_id)
+                    tmp.replace(file_path(doc))
+            finally:
+                tmp.unlink(missing_ok=True)
             added = add_entries(doc["id"], collection_ids)
             if added:
                 results.append({"name": name, "id": doc["id"], "added_to": added})
@@ -458,12 +529,16 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         return {"queued": len(targets)}
 
     # --- search -----------------------------------------------------------------
+    def embed_ctx(client, model: str) -> int | None:
+        ctx = model_meta(client, model)["context_length"]
+        return min(ctx, 8192) if ctx else None
+
     def query_vector(client, models, text):
         model = installed(settings["embed_model"], models)
         if not model:
             return None
         try:
-            return client.embed(model, [prefixes(model)[0] + text])[0]
+            return client.embed(model, [prefixes(model)[0] + text], embed_ctx(client, model))[0]
         except Exception as e:
             log.warning("query embedding failed: %s", e)
             return None
@@ -550,15 +625,15 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             return json.dumps(obj) + "\n"
 
         def stream():
-            answer, sources, meta = "", [], {}
+            answer, sources, meta, saved, stopped = "", [], {}, {}, True
             t0 = time.perf_counter()
             timings = {}
             try:
                 if chat["collection_id"] is None:
                     raise RuntimeError("Pick a collection for this chat first.")
                 client = ollama()
-                models = client.models()
-                model = resolve_chat_model(models)
+                models = installed_models(client)
+                model = resolve_chat_model(models, client)
                 if not model:
                     raise RuntimeError("No chat model is installed in Ollama. Open Settings to add one.")
                 vec = query_vector(client, models, question)
@@ -568,32 +643,56 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                                                  settings["scan_k"], vec, settings["embed_model"], settings["rerank"])
                 timings["search_ms"] = round((time.perf_counter() - t1) * 1000)
                 files = [e["document"] for e in store.entries(collection_id=chat["collection_id"])]
-                messages = build_messages(question, sources, history, chat["collection"], files)
+                found = len(sources)
+                messages, num_ctx, sources, est = fit_prompt(question, sources, history, chat["collection"], files,
+                                                             model_meta(client, model)["context_length"])
+                if len(sources) < found:
+                    log.info("prompt budget: kept %d of %d passages for %s", len(sources), found, model)
                 meta = {"model": model, "mode": "hybrid" if vec is not None else "keyword"}
                 if settings["debug"]:
                     meta["debug"] = {**info, "temperature": settings["temperature"], "top_k": settings["top_k"],
                                      "scan_k": settings["scan_k"], "rerank": settings["rerank"], "timings": timings,
-                                     "prompt": messages}
+                                     "num_ctx": num_ctx, "estimated_prompt_tokens": est,
+                                     "passages_trimmed_to_fit": found - len(sources), "prompt": messages}
                 yield line({"type": "meta", "sources": sources, **meta})
                 t2 = time.perf_counter()
-                for piece in client.chat(model, messages, settings["temperature"]):
-                    if not answer and piece:
-                        timings["first_token_ms"] = round((time.perf_counter() - t2) * 1000)
-                    answer += piece
-                    yield line({"type": "token", "text": piece})
+                pieces = client.chat(model, messages, settings["temperature"], num_ctx)
+                try:
+                    for piece in pieces:
+                        if not answer and piece:
+                            timings["first_token_ms"] = round((time.perf_counter() - t2) * 1000)
+                        answer += piece
+                        yield line({"type": "token", "text": piece})
+                finally:
+                    pieces.close()  # closes the HTTP stream, which makes Ollama stop generating
                 timings["total_ms"] = round((time.perf_counter() - t0) * 1000)
                 log.info("answered in chat %s with %s: %d sources, %s", chat_id, model, len(sources), timings)
+                stopped = False
             except Exception as e:
+                stopped = False
                 log.warning("ask failed: %s", e)
                 yield line({"type": "error", "text": str(e)})
                 answer = answer or f"⚠ {e}"
-            if meta.get("debug"):
-                meta["debug"]["timings"] = timings
-                meta["debug"].pop("prompt", None)  # keep stored history small
-            msg_id = store.add_message(chat_id, "assistant", answer, sources, meta)
-            yield line({"type": "done", "id": msg_id, "timings": timings if settings["debug"] else None})
+            finally:  # also runs when the client goes away (Stop): keep what was written so far
+                if stopped:
+                    meta["stopped"] = True
+                    log.info("answer in chat %s stopped by the user after %d characters", chat_id, len(answer))
+                if meta.get("debug"):
+                    meta["debug"]["timings"] = timings
+                    meta["debug"].pop("prompt", None)  # keep stored history small
+                saved["id"] = store.add_message(chat_id, "assistant", answer, sources, meta)
+            yield line({"type": "done", "id": saved["id"], "timings": timings if settings["debug"] else None})
 
-        return StreamingResponse(stream(), media_type="application/x-ndjson")
+        async def body():
+            gen = stream()
+            try:
+                async for chunk in iterate_in_threadpool(gen):
+                    yield chunk
+            finally:  # on disconnect Starlette cancels us; close the generator so its cleanup runs now
+                with anyio.CancelScope(shield=True):
+                    await run_in_threadpool(gen.close)
+
+        return StreamingResponse(body(), media_type="application/x-ndjson")
 
     app.mount("/", StaticFiles(directory=STATIC, html=True), name="ui")
     return app

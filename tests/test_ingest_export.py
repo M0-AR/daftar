@@ -85,3 +85,10 @@ def test_html_export_escapes_markup():
 def test_unknown_format_rejected():
     with pytest.raises(ValueError):
         export(PAGES, "x.pdf", "exe")
+
+
+def test_pdf_text_cleanup():
+    from daftar.ingest import clean_pdf_text
+    assert clean_pdf_text("ﬁnancial infor-\nmation") == "financial information"
+    assert clean_pdf_text("ﻣﺮﺎﺑﺤﺔ") == "مرابحة"
+    assert clean_pdf_text("Item A-\nB stays") == "Item A-\nB stays"  # not a split lowercase word

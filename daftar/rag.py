@@ -4,31 +4,10 @@ import threading
 
 import numpy as np
 
-WORD = re.compile(r"\w+", re.UNICODE)
+from daftar.textnorm import coverage, fts_query, terms
+
 MIN_VECTOR_SIM = 0.2
-STOP = set("""a an and are as at be by can do does for from has have how i in is it its me my of on or
-our that the their this to was what when where which who why will with you your about into than then
-there these those were been being please tell give show much many need needed some any all also just""".split())
-
-
-def terms(text: str) -> list[str]:
-    return list(dict.fromkeys(w for w in WORD.findall(text.lower()) if len(w) > 1 and w not in STOP))
-
-
-STEM = 6  # words this long match on their first 6 letters: clause/clauses, terminate/termination
-
-
-def fts_query(question: str) -> str:
-    return " OR ".join(f'"{w[:STEM]}"*' if len(w) >= STEM else f'"{w}"' for w in terms(question))
-
-
-def coverage(query_terms: list[str], text: str) -> float:
-    """Share of the question's terms that appear in the passage (long words match by prefix)."""
-    if not query_terms:
-        return 0.0
-    words = set(WORD.findall(text.lower()))
-    stems = {w[:STEM] for w in words if len(w) >= STEM}
-    return sum(t in words or (len(t) >= STEM and t[:STEM] in stems) for t in query_terms) / len(query_terms)
+RRF_K = 60  # the standard constant (Cormack et al. 2009), default in Elasticsearch/OpenSearch
 
 
 class Retriever:
@@ -93,7 +72,7 @@ class Retriever:
         fused = {}
         for ranking in (keyword_ids, vector_ids):
             for rank, cid in enumerate(ranking):
-                fused[cid] = fused.get(cid, 0.0) + 1.0 / (60 + rank)
+                fused[cid] = fused.get(cid, 0.0) + 1.0 / (RRF_K + rank)
         info = {"keyword_hits": len(keyword_ids), "vector_hits": len(vector_ids), "candidates": len(fused)}
         if not fused:
             return [], info
@@ -111,12 +90,12 @@ class Retriever:
             row["match"] = int(round(min(max(relevance, 0.0), 1.0) * 100))
             row["_score"] = relevance
 
-        if rerank:
-            ordered = sorted(rows.values(), key=lambda r: (r["_score"], fused[r["id"]]), reverse=True)
-            best = ordered[0]["_score"]
+        # Order by Reciprocal Rank Fusion: it uses ranks only, so BM25 and cosine scales never mix
+        # (measured in scripts/eval_retrieval.py: score-weighted re-sorting never beat RRF).
+        ordered = [rows[cid] for cid in sorted(fused, key=fused.get, reverse=True) if cid in rows]
+        if rerank:  # "Improve answer relevance": keep the order, drop passages far weaker than the best
+            best = max(r["_score"] for r in ordered[:top_k])
             ordered = [r for r in ordered if r["_score"] >= 0.5 * best] or ordered[:1]
-        else:
-            ordered = [rows[cid] for cid in sorted(fused, key=fused.get, reverse=True) if cid in rows]
         picked = ordered[:top_k]
         for r in picked:
             r.pop("_score", None)
@@ -134,16 +113,62 @@ Rules:
 - Reply in the same language as the question."""
 
 
+# Chat-template control tokens (ChatML, Llama 3, Gemma, Mistral, Phi...). Ollama renders message text into the
+# model's template as-is, so a document containing them could forge a new system/user turn
+# ("document-authored control-signal impersonation", arXiv 2606.09005). They never belong in document text.
+CONTROL_TOKENS = re.compile(r"<\|[a-z_]{2,30}\|>|</?(?:start|end)_of_turn>|\[/?INST\]|<</?SYS>>|</?s>", re.IGNORECASE)
+
+
+def neutralize(text: str) -> str:
+    return CONTROL_TOKENS.sub(" ", text)
+
+
 def build_messages(question: str, sources: list[dict], history: list[dict], collection: str,
                    files: list[str]) -> list[dict]:
     blocks = []
     for i, s in enumerate(sources, 1):
         where = f", page {s['page']}" if s["ext"] == ".pdf" else ""
-        blocks.append(f"[{i}] ({s['document']}{where})\n{s['text']}")
+        blocks.append(f"[{i}] ({neutralize(s['document'])}{where})\n{neutralize(s['text'])}")
     context = "\n\n".join(blocks) if blocks else "(no passage in the documents matched this question)"
+    files = [neutralize(f) for f in files]
     file_list = ", ".join(files[:60]) + (f" and {len(files) - 60} more" if len(files) > 60 else "") if files else "none yet"
     messages = [{"role": "system", "content": SYSTEM.format(collection=collection, files=file_list)}]
     for m in history[-6:]:
         messages.append({"role": m["role"], "content": m["content"]})
     messages.append({"role": "user", "content": f"Passages:\n\n{context}\n\nQuestion: {question}"})
     return messages
+
+
+# --- prompt budget --------------------------------------------------------------------------------
+# Measured on qwen2.5 with Ollama's prompt_eval_count: English ≈ 4.9 chars/token, plain Arabic ≈ 2.4,
+# vocalized Arabic ≈ 1.2. Counting Arabic as 1 char/token and the rest as 3.5 over-estimates all three,
+# so the context window is never too small (Ollama silently drops the start of an oversized prompt).
+ARABIC_CHARS = re.compile("[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
+CTX_STEPS = (4096, 8192, 16384, 32768)  # few distinct sizes: each new num_ctx makes Ollama reload the model
+ANSWER_RESERVE = 1024
+
+
+def estimate_tokens(text: str) -> int:
+    arabic = len(ARABIC_CHARS.findall(text))
+    return int(arabic + (len(text) - arabic) / 3.5) + 4
+
+
+def fit_prompt(question: str, sources: list[dict], history: list[dict], collection: str, files: list[str],
+               model_ctx: int | None) -> tuple[list[dict], int, list[dict], int]:
+    """Build messages that fit the model. Drops the oldest history first, then the weakest passages.
+    Returns (messages, num_ctx, sources_used, estimated_tokens)."""
+    limit = min(model_ctx or CTX_STEPS[1], CTX_STEPS[-1])
+    sources, history = list(sources), list(history)
+    while True:
+        messages = build_messages(question, sources, history, collection, files)
+        need = sum(estimate_tokens(m["content"]) for m in messages) + ANSWER_RESERVE
+        if need <= limit:
+            break
+        if history:
+            history = history[2:] if len(history) > 1 else []
+        elif len(sources) > 1:
+            sources.pop()
+        else:
+            break
+    num_ctx = min(next((step for step in CTX_STEPS if step >= need), CTX_STEPS[-1]), limit)
+    return messages, num_ctx, sources, need

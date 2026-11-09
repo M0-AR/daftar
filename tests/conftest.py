@@ -13,6 +13,7 @@ class FakeOllama:
     """Stands in for Ollama: deterministic bag-of-words embeddings and a canned, citing answer."""
     models_installed = ["fake-chat:latest", "nomic-embed-text:latest"]
     calls = []
+    context_length = 32768
 
     def __init__(self, url, allow_remote=False):
         check_url(url, allow_remote)
@@ -22,12 +23,17 @@ class FakeOllama:
         return "fake"
 
     def model_list(self):
-        return [{"name": m, "size": 1, "family": "", "parameters": "", "quantization": ""} for m in self.models_installed]
+        return [{"name": m, "digest": f"{m}@{self.context_length}", "size": 1, "family": "", "parameters": "",
+                 "quantization": ""} for m in self.models_installed]
 
     def models(self):
         return list(self.models_installed)
 
-    def embed(self, model, texts):
+    def show(self, model):
+        caps = ["embedding"] if "embed" in model else ["completion"]
+        return {"context_length": self.context_length, "capabilities": caps}
+
+    def embed(self, model, texts, num_ctx=None):
         out = []
         for t in texts:
             v = [0.0] * 128
@@ -36,8 +42,8 @@ class FakeOllama:
             out.append(v)
         return out
 
-    def chat(self, model, messages, temperature=0.2):
-        FakeOllama.calls.append({"model": model, "messages": messages, "temperature": temperature})
+    def chat(self, model, messages, temperature=0.2, num_ctx=8192):
+        FakeOllama.calls.append({"model": model, "messages": messages, "temperature": temperature, "num_ctx": num_ctx})
         yield from ["The answer ", "is in the passages [1]."]
 
     def pull(self, name):
@@ -89,6 +95,7 @@ class Api:
 def fake():
     FakeOllama.models_installed = ["fake-chat:latest", "nomic-embed-text:latest"]
     FakeOllama.calls = []
+    FakeOllama.context_length = 32768
     return FakeOllama
 
 

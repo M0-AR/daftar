@@ -336,3 +336,102 @@ def test_keyword_search_matches_word_variants(api, fake):
     api.upload(cid, ("c.txt", b"Either party may terminate the agreement. Each clause is binding.", "text/plain"))
     top = api.ask(api.chat(cid), "termination clauses")[0]["sources"][0]
     assert top["match"] == 100  # terminate~termination, clause~clauses
+
+
+def test_prompt_is_sized_to_fit_the_model(api, fake):
+    """Ollama silently drops the start of prompts longer than num_ctx, so the window must cover the prompt."""
+    cid = api.collection()
+    api.upload(cid, TXT)
+    api.ask(api.chat(cid), "termination notice")
+    assert fake.calls[-1]["num_ctx"] in (4096, 8192)
+    fake.context_length = 2048  # a tiny model: passages are trimmed instead of silently truncated
+    api.c.put("/api/settings", json={"top_k": 20, "rerank": False, "debug": True})
+    events = api.ask(api.chat(cid), "general obligations clause terms")
+    assert fake.calls[-1]["num_ctx"] == 2048
+    assert events[0]["debug"]["estimated_prompt_tokens"] <= 2048 or len(events[0]["sources"]) == 1
+    assert events[0]["debug"]["passages_trimmed_to_fit"] > 0
+
+
+def test_chat_models_are_classified_by_capability(api, fake):
+    fake.models_installed = ["all-minilm:latest", "tiny-llm:latest"]  # an embedder without "embed" in its name
+
+    def show(self, model):
+        return {"context_length": 8192, "capabilities": ["embedding"] if "minilm" in model else ["completion"]}
+    fake.show = show
+    status = api.c.get("/api/status").json()
+    assert status["chat_model"] == "tiny-llm:latest" and status["chat_models"] == ["tiny-llm:latest"]
+    assert status["embed_models"] == ["all-minilm:latest"]
+
+
+def test_fallback_prefers_the_largest_chat_model(api, fake):
+    fake.models_installed = ["a-tiny:0.5b", "b-small:1.5b", "nomic-embed-text:latest"]
+    real = fake.model_list
+    fake.model_list = lambda self: [{**m, "size": {"a-tiny:0.5b": 300, "b-small:1.5b": 900}.get(m["name"], 1)} for m in real(self)]
+    try:
+        assert api.c.get("/api/status").json()["chat_model"] == "b-small:1.5b"
+    finally:
+        fake.model_list = real
+
+
+def test_oversized_upload_is_rejected_without_leftovers(api, tmp_path, monkeypatch):
+    import daftar.server
+    monkeypatch.setattr(daftar.server, "MAX_UPLOAD_BYTES", 3 << 20)
+    cid = api.collection()
+    res = api.upload(cid, ("big.txt", b"a" * (4 << 20), "text/plain"), ("ok.txt", b"b " * (1 << 20), "text/plain"))
+    assert res[0]["skipped"] == "larger than 3 MB" and "added_to" in res[1]
+    assert [d["name"] for d in api.c.get("/api/documents").json()] == ["ok.txt"]
+    assert not list((tmp_path / "files").glob(".upload-*"))  # no temp files left behind
+    assert (tmp_path / "files" / f"{res[1]['id']}.txt").stat().st_size == 2 << 20
+
+
+def test_stop_saves_partial_answer_and_closes_the_model_stream(tmp_path, fake):
+    """Pressing Stop (client disconnect) must end generation upstream and keep what was written so far.
+    Runs a real uvicorn server: TestClient never reports a disconnect."""
+    import socket
+    import threading
+
+    import httpx
+    import uvicorn
+
+    from daftar.server import create_app
+    closed = threading.Event()
+
+    def slow_chat(self, model, messages, temperature=0.2, num_ctx=8192):
+        try:
+            for i in range(10_000):
+                yield f"word{i} "
+                threading.Event().wait(0.005)
+        finally:
+            closed.set()  # the real client closes its HTTP stream to Ollama here
+    original, fake.chat = fake.chat, slow_chat
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(create_app(tmp_path, ollama_factory=fake), host="127.0.0.1", port=port,
+                                           log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        while not server.started:
+            threading.Event().wait(0.02)
+        c = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers={"X-Daftar": "1"}, timeout=30)
+        cid = c.post("/api/collections", json={"name": "C"}).json()["id"]
+        c.post("/api/documents", files=[("files", TXT)], data={"collection_ids": [str(cid)]})
+        c.app_state = None
+        chat_id = c.post("/api/chats", json={"collection_id": cid}).json()["id"]
+        with c.stream("POST", f"/api/chats/{chat_id}/ask", json={"question": "termination"}) as r:
+            for n, _ in enumerate(r.iter_lines()):
+                if n == 5:
+                    break
+        assert closed.wait(5), "model stream was not closed after the client went away"
+        for _ in range(100):
+            msgs = c.get(f"/api/chats/{chat_id}").json()["messages"]
+            if msgs[-1]["role"] == "assistant":
+                break
+            threading.Event().wait(0.05)
+        assert msgs[-1]["role"] == "assistant" and msgs[-1]["content"].startswith("word0")
+        assert msgs[-1]["meta"].get("stopped") is True
+    finally:
+        fake.chat = original
+        server.should_exit = True
+        thread.join(5)

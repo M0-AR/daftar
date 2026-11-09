@@ -11,6 +11,8 @@ import time
 
 import numpy as np
 
+from daftar.textnorm import index_text
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS collections(
   id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '',
@@ -31,11 +33,6 @@ CREATE TABLE IF NOT EXISTS chunks(
   ord INTEGER NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, embedding BLOB);
 CREATE INDEX IF NOT EXISTS chunks_entry ON chunks(entry_id);
 CREATE INDEX IF NOT EXISTS entries_collection ON entries(collection_id);
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, content='chunks', content_rowid='id');
-CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text); END;
-CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
-  INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text); END;
 CREATE TABLE IF NOT EXISTS chats(
   id INTEGER PRIMARY KEY, collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
   title TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
@@ -45,6 +42,18 @@ CREATE TABLE IF NOT EXISTS messages(
 """
 
 
+# Keyword index (schema v2): stores normalized + stemmed text (see textnorm.py), keyed by chunk id.
+# 'remove_diacritics 2' folds all Latin accents (SQLite FTS5 docs).
+FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, tokenize = 'unicode61 remove_diacritics 2');
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
+  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, daftar_index(new.text)); END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
+  DELETE FROM chunks_fts WHERE rowid = old.id; END;
+"""
+SCHEMA_VERSION = 2
+
+
 class Store:
     def __init__(self, path):
         self.db = sqlite3.connect(str(path), check_same_thread=False)
@@ -52,7 +61,21 @@ class Store:
         self.lock = threading.RLock()
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.create_function("daftar_index", 1, index_text, deterministic=True)
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self):
+        version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        if version < 2:  # v1 indexed raw text: rebuild the keyword index with normalized text
+            self.db.executescript("""DROP TRIGGER IF EXISTS chunks_ai; DROP TRIGGER IF EXISTS chunks_ad;
+                                     DROP TABLE IF EXISTS chunks_fts;""")
+            self.db.executescript(FTS_SCHEMA)
+            with self.db:
+                self.db.execute("INSERT INTO chunks_fts(rowid, text) SELECT id, daftar_index(text) FROM chunks")
+                self.db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        else:
+            self.db.executescript(FTS_SCHEMA)
 
     def all(self, sql, args=()) -> list[dict]:
         with self.lock:

@@ -54,20 +54,31 @@ class Ollama:
         out = []
         for m in self.http.get("/api/tags").json()["models"]:
             d = m.get("details") or {}
-            out.append({"name": m["name"], "size": m.get("size", 0), "family": d.get("family", ""),
+            out.append({"name": m["name"], "digest": m.get("digest", ""), "size": m.get("size", 0), "family": d.get("family", ""),
                         "parameters": d.get("parameter_size", ""), "quantization": d.get("quantization_level", "")})
         return sorted(out, key=lambda m: m["name"])
 
     def models(self) -> list[str]:
         return [m["name"] for m in self.model_list()]
 
-    def embed(self, model: str, texts: list[str]) -> list[list[float]]:
-        return self._post("/api/embed", {"model": model, "input": texts})["embeddings"]
+    def show(self, model: str) -> dict:
+        """Context length and capabilities ('completion', 'embedding', ...) from /api/show."""
+        d = self._post("/api/show", {"model": model})
+        info = d.get("model_info") or {}
+        ctx = next((v for k, v in info.items() if k.endswith(".context_length") and isinstance(v, int)), None)
+        return {"context_length": ctx, "capabilities": d.get("capabilities") or []}
 
-    def chat(self, model: str, messages: list[dict], temperature: float = 0.2):
-        """Yield answer text pieces as Ollama streams them."""
+    def embed(self, model: str, texts: list[str], num_ctx: int | None = None) -> list[list[float]]:
+        body = {"model": model, "input": texts}
+        if num_ctx:  # Ollama's default window is smaller than many embedders support; inputs beyond it are cut
+            body["options"] = {"num_ctx": num_ctx}
+        return self._post("/api/embed", body)["embeddings"]
+
+    def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192):
+        """Yield answer text pieces as Ollama streams them. num_ctx must cover the whole prompt:
+        Ollama silently drops the start of a prompt that does not fit (measured: 2048 of ~6000 tokens kept)."""
         body = {"model": model, "messages": messages, "stream": True,
-                "options": {"num_ctx": 8192, "temperature": temperature}}
+                "options": {"num_ctx": num_ctx, "temperature": temperature}}
         with self.http.stream("POST", "/api/chat", json=body) as r:
             if r.status_code != 200:
                 raise OllamaError(_error_text(r.read().decode()))
