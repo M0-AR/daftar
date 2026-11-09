@@ -25,19 +25,26 @@ English research notes, two Arabic documents, one vocalized). Live numbers come 
 | 12 | Model choice matters for injection resistance | Plain injection attack: qwen2:0.5b obeyed **6/6**, qwen2.5:1.5b **0/6** | Fallback picks the *largest* installed chat model, not the first alphabetically |
 | 13 | Ollama `/api/show` reports `<arch>.context_length` and `capabilities` (checked locally: `qwen2.context_length: 32768`, `['completion','tools']`) | An embedder without "embed" in its name (e.g. all-minilm) was offered as a chat model | Models classified by capability (name heuristic only for old Ollama); metadata cached per digest |
 | 14 | nomic-embed-text needs `search_query:` / `search_document:` prefixes; Ollama does not add them ([model card](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5)) | Already implemented | Kept; embedding requests now also set `num_ctx` from the embedder's context length (Ollama default window is smaller) |
+| 15 | Transforming untrusted text (Spotlighting's "encoding" mode) beats delimiters ([Hines et al., arXiv 2403.14720](https://arxiv.org/pdf/2403.14720); [Gemini defense lessons, arXiv 2505.14534](https://arxiv.org/pdf/2505.14534)) | gemma3:1b, strong attack (fake turns + repeated order): current prompt **8/8 hijacked**, JSON-quoted passages **0/8**; answers (27 questions): gemma correct 20→20, cited **7→19**; qwen2.5:1.5b correct 20→**22**, cited 8→4 (`scripts/eval_answers.py`, `scripts/eval_injection_strong.py`) | Passages are sent as one JSON object per line (`PASSAGE_FORMAT = "json"`); JSON escaping keeps a document's line breaks and quotes from posing as new instruction lines |
 
 ## Considered and rejected (with evidence)
 
 | Idea (source) | Why not |
 |---|---|
 | Spotlighting with delimiters around passages ([Hines et al., arXiv 2403.14720](https://arxiv.org/pdf/2403.14720)) | Measured on qwen2.5:1.5b: injection success went **0/6 → 6/6** with randomized delimiters. The paper itself advises against delimiting alone. |
-| Datamarking (replace spaces with ^) | No gain over the current prompt (0/6 for both) and it alters the text a 1B model must read; not adopted. |
+| Datamarking (replace spaces with ^) | Blocks the strong attack on gemma3:1b (0/8) but leaks `^` into answers ("^18,400^USD.^"); JSON quoting blocks it equally without corrupting output. |
+| Sandwich defense (repeat the task after the passages) | gemma3:1b strong attack: still **8/8 hijacked**. |
 | Cross-encoder reranker | Ollama has no official rerank endpoint ([ollama #16076](https://github.com/ollama/ollama/issues/16076)); generate-based workarounds give uniform scores. Revisit when Ollama ships `/api/rerank`. |
 | "Lost in the middle" edge ordering ([arXiv 2410.05983](https://arxiv.org/pdf/2410.05983)) | Paper reports negligible gains for small retrieval sets; Daftar sends ≤ 6 passages by default. Best passage stays first, question last. |
 | Larger default blocks (400–512 tokens ≈ 1600–2000 chars) | Eval: 1000 = 1600 = 2400 chars here, 500 slightly worse. 1000 chars (~250 tokens, 15% overlap) is inside the researched 200–512 token range and keeps prompts small for 1B models. |
 | FTS5 `porter` stemmer | English-only (SQLite docs); the prefix rule already handles English variants and Light10 handles Arabic. |
 | PyMuPDF instead of pypdf | Faster, but AGPL-3.0; pypdf scored F1 ≈ 0.95–0.97 on legal/financial/manual documents ([arXiv 2410.09871](https://arxiv.org/html/2410.09871v1)). Kept pypdf + NFKC/de-hyphenation clean-up. |
 
-## Still to verify when the models are installed
-- `gemma3:1b`: rerun `pytest -m live` and the injection script; confirm the control-token filter matters for Gemma's `<start_of_turn>` template.
+## Findings with gemma3:1b (installed 2026-11-09)
+- Live test passes with a citation ("2,350 euros [1]").
+- qwen2.5:1.5b resists the same strong attack under every variant (0/6), JSON included: no regression on the fallback model.
+- Control-token stripping alone did **not** stop the strong attack (8/8 hijacked with or without it): the repeated plain-text order is enough. Stripping is kept as a cheap layer; JSON quoting is what stops it.
+- Ollama on this machine runs CPU-only (`/usr/local/lib/ollama` is empty, startup log `library=cpu`, `total_vram 0 B`): about 19 s per answer. Fix: reinstall Ollama with its CUDA libraries.
+
+## Still to verify
 - `nomic-embed-text`: `python scripts/eval_retrieval.py --embed` to measure hybrid search on the same set.
