@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from daftar import APP_NAME, __version__
 from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
-from daftar.ingest import SUPPORTED, chunk_pages, extract, word_count
+from daftar.ingest import SUPPORTED, chunk_sections, extract, word_count
 from daftar.ollama import LOOPBACK, Ollama, check_url, prefixes
 from daftar.rag import Retriever, fit_prompt
 from daftar.store import Store
@@ -87,6 +87,7 @@ class CollectionIn(BaseModel):
 
 class ChatIn(BaseModel):
     collection_id: int | None = None
+    all_collections: bool | None = None
     title: str | None = None
 
 
@@ -166,7 +167,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                 pages = extract(file_path(doc))
                 store.set_pages(doc["id"], pages, sum(word_count(t) for _, t in pages))
             size, overlap = settings["chunk_size"], settings["chunk_overlap"]
-            chunks = chunk_pages(pages, size, overlap)
+            chunks = chunk_sections(pages, size, overlap)
             if not chunks:
                 raise ValueError("No text found. Scanned PDFs need OCR, which is not supported yet.")
             ids = store.replace_chunks(entry_id, chunks)
@@ -177,7 +178,8 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                 if model:
                     prefix = prefixes(model)[1]
                     for i in range(0, len(chunks), 32):
-                        batch = [prefix + text for _, text in chunks[i:i + 32]]
+                        # Contextual chunk header: the section path is embedded with the passage text.
+                        batch = [prefix + (f"{sec}\n" if sec else "") + text for _, text, sec in chunks[i:i + 32]]
                         store.set_embeddings(ids[i:i + 32], client.embed(model, batch, embed_ctx(client, model)))
                     embed_model = settings["embed_model"]
                 else:
@@ -564,16 +566,20 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
     @app.post("/api/chats")
     def create_chat(body: ChatIn):
         now = time.time()
-        return {"id": store.run("INSERT INTO chats(collection_id, title, created, updated) VALUES (?,?,?,?)",
-                                (body.collection_id, (body.title or "New chat").strip() or "New chat", now, now))}
+        everything = bool(body.all_collections)
+        return {"id": store.run("INSERT INTO chats(collection_id, all_collections, title, created, updated) "
+                                "VALUES (?,?,?,?,?)", (None if everything else body.collection_id, int(everything),
+                                                      (body.title or "New chat").strip() or "New chat", now, now))}
 
     @app.patch("/api/chats/{chat_id}")
     def update_chat(chat_id: int, body: ChatIn):
         need(store.one("SELECT id FROM chats WHERE id = ?", (chat_id,)), 404, "Chat not found")
         if "title" in body.model_fields_set and body.title and body.title.strip():
             store.run("UPDATE chats SET title = ? WHERE id = ?", (body.title.strip()[:120], chat_id))
-        if "collection_id" in body.model_fields_set:
-            store.run("UPDATE chats SET collection_id = ? WHERE id = ?", (body.collection_id, chat_id))
+        if body.all_collections:
+            store.run("UPDATE chats SET collection_id = NULL, all_collections = 1 WHERE id = ?", (chat_id,))
+        elif "collection_id" in body.model_fields_set:
+            store.run("UPDATE chats SET collection_id = ?, all_collections = 0 WHERE id = ?", (body.collection_id, chat_id))
         return {"ok": True}
 
     @app.get("/api/chats/{chat_id}")
@@ -629,8 +635,10 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
             t0 = time.perf_counter()
             timings = {}
             try:
-                if chat["collection_id"] is None:
+                everything = bool(chat["all_collections"])
+                if chat["collection_id"] is None and not everything:
                     raise RuntimeError("Pick a collection for this chat first.")
+                scope = None if everything else chat["collection_id"]
                 client = ollama()
                 models = installed_models(client)
                 model = resolve_chat_model(models, client)
@@ -639,12 +647,12 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                 vec = query_vector(client, models, question)
                 timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
                 t1 = time.perf_counter()
-                sources, info = retriever.search(question, chat["collection_id"], settings["top_k"],
+                sources, info = retriever.search(question, scope, settings["top_k"],
                                                  settings["scan_k"], vec, settings["embed_model"], settings["rerank"])
                 timings["search_ms"] = round((time.perf_counter() - t1) * 1000)
-                files = [e["document"] for e in store.entries(collection_id=chat["collection_id"])]
+                files = list(dict.fromkeys(e["document"] for e in store.entries(collection_id=scope)))
                 found = len(sources)
-                messages, num_ctx, sources, est = fit_prompt(question, sources, history, chat["collection"], files,
+                messages, num_ctx, sources, est = fit_prompt(question, sources, history, "all collections" if everything else chat["collection"], files,
                                                              model_meta(client, model)["context_length"])
                 if len(sources) < found:
                     log.info("prompt budget: kept %d of %d passages for %s", len(sources), found, model)

@@ -30,12 +30,12 @@ CREATE TABLE IF NOT EXISTS entries(
   UNIQUE(document_id, collection_id));
 CREATE TABLE IF NOT EXISTS chunks(
   id INTEGER PRIMARY KEY, entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
-  ord INTEGER NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, embedding BLOB);
+  ord INTEGER NOT NULL, page INTEGER NOT NULL, text TEXT NOT NULL, embedding BLOB, section TEXT);
 CREATE INDEX IF NOT EXISTS chunks_entry ON chunks(entry_id);
 CREATE INDEX IF NOT EXISTS entries_collection ON entries(collection_id);
 CREATE TABLE IF NOT EXISTS chats(
   id INTEGER PRIMARY KEY, collection_id INTEGER REFERENCES collections(id) ON DELETE SET NULL,
-  title TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
+  title TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL, all_collections INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS messages(
   id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
   role TEXT NOT NULL, content TEXT NOT NULL, sources TEXT, meta TEXT, created REAL NOT NULL);
@@ -47,11 +47,11 @@ CREATE TABLE IF NOT EXISTS messages(
 FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, tokenize = 'unicode61 remove_diacritics 2');
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
-  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, daftar_index(new.text)); END;
+  INSERT INTO chunks_fts(rowid, text) VALUES (new.id, daftar_index(COALESCE(new.section, '') || ' ' || new.text)); END;
 CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
   DELETE FROM chunks_fts WHERE rowid = old.id; END;
 """
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class Store:
@@ -67,12 +67,25 @@ class Store:
 
     def _migrate(self):
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version < 2:  # v1 indexed raw text: rebuild the keyword index with normalized text
+        if version < SCHEMA_VERSION:
+            # v2: normalized keyword index. v3: section headings + code identifier parts in the index,
+            # chats that search all collections. Rebuild the index and re-chunk documents to find sections.
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(chunks)")}
+            if "section" not in cols:
+                self.db.execute("ALTER TABLE chunks ADD COLUMN section TEXT")
+            chat_cols = {r[1] for r in self.db.execute("PRAGMA table_info(chats)")}
+            if "all_collections" not in chat_cols:
+                self.db.execute("ALTER TABLE chats ADD COLUMN all_collections INTEGER NOT NULL DEFAULT 0")
             self.db.executescript("""DROP TRIGGER IF EXISTS chunks_ai; DROP TRIGGER IF EXISTS chunks_ad;
                                      DROP TABLE IF EXISTS chunks_fts;""")
             self.db.executescript(FTS_SCHEMA)
             with self.db:
-                self.db.execute("INSERT INTO chunks_fts(rowid, text) SELECT id, daftar_index(text) FROM chunks")
+                self.db.execute("INSERT INTO chunks_fts(rowid, text) "
+                                "SELECT id, daftar_index(COALESCE(section, '') || ' ' || text) FROM chunks")
+                if version >= 1 or self.db.execute("SELECT COUNT(*) FROM entries").fetchone()[0]:
+                    self.db.execute("UPDATE entries SET status = 'queued' WHERE status IN ('ready', 'error')")
+                # Re-read files with the current extractors (Word heading styles, HTML, PDF clean-up).
+                self.db.execute("UPDATE documents SET content = NULL")
                 self.db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         else:
             self.db.executescript(FTS_SCHEMA)
@@ -154,12 +167,13 @@ class Store:
         cols = ", ".join(f"{k} = ?" for k in fields)
         self.run(f"UPDATE entries SET {cols} WHERE id = ?", (*fields.values(), entry_id))
 
-    def replace_chunks(self, entry_id: int, chunks: list[tuple[int, str]]) -> list[int]:
+    def replace_chunks(self, entry_id: int, chunks: list[tuple]) -> list[int]:
+        """chunks: (page, text) or (page, text, section)."""
         with self.lock, self.db:
             self.db.execute("DELETE FROM chunks WHERE entry_id = ?", (entry_id,))
-            return [self.db.execute("INSERT INTO chunks(entry_id, ord, page, text) VALUES (?,?,?,?)",
-                                    (entry_id, i, page, text)).lastrowid
-                    for i, (page, text) in enumerate(chunks)]
+            return [self.db.execute("INSERT INTO chunks(entry_id, ord, page, text, section) VALUES (?,?,?,?,?)",
+                                    (entry_id, i, c[0], c[1], c[2] if len(c) > 2 else None)).lastrowid
+                    for i, c in enumerate(chunks)]
 
     def set_embeddings(self, ids: list[int], vectors: list[list[float]]):
         rows = []

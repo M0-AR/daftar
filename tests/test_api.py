@@ -435,3 +435,79 @@ def test_stop_saves_partial_answer_and_closes_the_model_stream(tmp_path, fake):
         fake.chat = original
         server.should_exit = True
         thread.join(5)
+
+
+# --- beyond the reference: all-collection chats, code files, section citations -----------------
+def test_chat_can_search_all_collections(api, fake):
+    a, b = api.collection("A"), api.collection("B")
+    api.upload(a, TXT)
+    api.upload(b, RECIPE)
+    chat_id = api.c.post("/api/chats", json={"all_collections": True}).json()["id"]
+    docs = {s["document"] for s in api.ask(chat_id, "termination notice bake flour")[0]["sources"]}
+    assert docs == {"msa.txt", "bread.txt"}
+    system = fake.calls[-1]["messages"][0]["content"]
+    assert "all collections" in system and "msa.txt" in system and "bread.txt" in system
+    # switch to one collection and back
+    api.c.patch(f"/api/chats/{chat_id}", json={"collection_id": b})
+    chat = api.c.get(f"/api/chats/{chat_id}").json()
+    assert chat["collection_id"] == b and chat["all_collections"] == 0
+    assert {s["document"] for s in api.ask(chat_id, "termination notice bake flour")[0]["sources"]} == {"bread.txt"}
+    api.c.patch(f"/api/chats/{chat_id}", json={"all_collections": True})
+    assert api.c.get(f"/api/chats/{chat_id}").json()["all_collections"] == 1
+
+
+def test_code_and_html_files_are_indexed(api):
+    cid = api.collection()
+    code = b"export function buildLoginUrl(redirectUri) {\n  return `/sso/start?redirect=${redirectUri}`;\n}\n"
+    page = b"<html><script>steal()</script><h1>Guide</h1><p>Install with the setup wizard.</p></html>"
+    res = api.upload(cid, ("session.js", code, "text/javascript"), ("guide.html", page, "text/html"))
+    assert all("added_to" in r for r in res)
+    hit = api.c.get("/api/search", params={"q": "how is the login url built", "collection_id": cid}).json()["results"][0]
+    assert hit["document"] == "session.js"  # camelCase identifier found by its words
+    doc_id = res[1]["id"]
+    text = api.c.get(f"/api/documents/{doc_id}/text").json()["pages"][0]["text"]
+    assert "steal()" not in text and "Install with the setup wizard." in text
+
+
+def test_sources_carry_their_section(api, fake):
+    import docx as _docx
+    import io as _io
+    d = _docx.Document()
+    d.add_heading("Staff Handbook", level=1)
+    d.add_heading("Parental Leave", level=2)
+    d.add_paragraph("Birth mothers receive sixteen weeks at full pay.")
+    buf = _io.BytesIO()
+    d.save(buf)
+    cid = api.collection()
+    api.upload(cid, ("handbook.docx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"))
+    events = api.ask(api.chat(cid), "How long is parental leave?")
+    top = events[0]["sources"][0]
+    assert top["section"] == "Staff Handbook > Parental Leave" and top["match_kind"] == "meaning"
+    assert '"source": "handbook.docx, Parental Leave"' in fake.calls[-1]["messages"][-1]["content"]
+
+
+def test_keyword_only_match_is_labelled_as_word_match(api, fake):
+    fake.models_installed = ["fake-chat:latest"]
+    cid = api.collection()
+    api.upload(cid, TXT)
+    assert api.ask(api.chat(cid), "invoices payable")[0]["sources"][0]["match_kind"] == "words"
+
+
+def test_v2_database_is_migrated_and_reindexed(tmp_path, fake):
+    """Opening a v2 database adds the new columns and re-queues documents so sections get computed."""
+    from fastapi.testclient import TestClient as _TC
+    from daftar.server import create_app as _create
+    with _TC(_create(tmp_path, ollama_factory=fake), base_url="http://127.0.0.1", headers={"X-Daftar": "1"}) as c:
+        cid = c.post("/api/collections", json={"name": "H"}).json()["id"]
+        c.post("/api/documents", files=[("files", ("h.md", b"# Handbook\n\n## Leave\n\nSixteen weeks at full pay.", "text/markdown"))],
+               data={"collection_ids": [str(cid)]})
+        wait_ingest(c.app)
+        store = c.app.state.store
+        with store.lock, store.db:  # simulate a v2 database: no sections yet, old cached text, old version stamp
+            store.db.execute("UPDATE chunks SET section = NULL")
+            store.db.execute("""UPDATE documents SET content = '[[1, "Handbook. Leave: sixteen weeks."]]'""")
+            store.db.execute("PRAGMA user_version = 2")
+    with _TC(_create(tmp_path, ollama_factory=fake), base_url="http://127.0.0.1", headers={"X-Daftar": "1"}) as c:
+        wait_ingest(c.app)
+        assert c.app.state.store.one("PRAGMA user_version")["user_version"] == 3
+        assert c.app.state.store.one("SELECT section FROM chunks")["section"] == "Handbook > Leave"

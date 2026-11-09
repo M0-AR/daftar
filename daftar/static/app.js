@@ -119,7 +119,7 @@ function md(text, nSources = Infinity) {
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\[(\d{1,2})\]/g, (m, n) => (Number(n) >= 1 && Number(n) <= nSources
-      ? `<button class="cite" data-n="${n}" title="Show source ${n}">${n}</button>` : m));
+      ? `<button class="cite" data-n="${n}" title="Show source ${n}">${n}</button>` : (nSources === Infinity ? m : "")));
   const out = []; let list = null; let para = [];
   const flushPara = () => { if (para.length) out.push(`<p>${inline(para.join("<br>"))}</p>`); para = []; };
   const flushList = () => { if (list) out.push(`<${list.tag}>${list.items.map((i) => `<li>${inline(i)}</li>`).join("")}</${list.tag}>`); list = null; };
@@ -146,6 +146,9 @@ function highlight(escapedText, query) {
   const re = new RegExp(`(?<![&#\\p{L}\\p{N}])(${pattern.join("|")})(?![\\p{L}\\p{N}])`, "giu");
   return escapedText.replace(re, "<mark>$1</mark>");
 }
+const where = (s) => [s.collection, s.ext === ".pdf" ? `page ${s.page}` : "", s.section ? s.section.split(" > ").pop() : ""]
+  .filter(Boolean).map(esc).join(" · ");
+const matchLabel = (s) => `<span class="match" title="${s.match_kind === "words" ? "Share of the question's words found in this passage (install a search model to compare meaning)" : "How closely this passage matches the question's meaning and words"}">${meter(s.match)}${s.match}% ${s.match_kind === "words" ? "word match" : "match"}</span>`;
 const meter = (pct) => `<div class="meter"><i style="width:${Math.max(0, Math.min(100, pct || 0))}%"></i></div>`;
 
 // ---------- routing ----------
@@ -188,7 +191,7 @@ async function loadChats() {
 function renderChatList() {
   const r = route();
   $("#chatList").innerHTML = state.chats.length ? state.chats.map((c) => `
-    <div class="chat-item ${r.view === "chat" && r.id === c.id ? "on" : ""}" data-chat="${c.id}" title="${esc(c.collection || "No collection")}">
+    <div class="chat-item ${r.view === "chat" && r.id === c.id ? "on" : ""}" data-chat="${c.id}" title="${esc(c.all_collections ? "All collections" : c.collection || "No collection")}">
       <svg viewBox="0 0 24 24"><path d="M4 5h16v11H8l-4 4z"/></svg>
       <div class="t"><div>${esc(c.title)}</div><small>${ago(c.updated)}</small></div>
       <button class="icon-btn x" data-del-chat="${c.id}" title="Delete chat">${ICON.x}</button></div>`).join("")
@@ -280,7 +283,8 @@ async function collectionStatus(id) {
 }
 
 // ---------- documents ----------
-const TYPES = [[".pdf", "PDF"], [".docx", "Word"], [".txt", "Text"], [".md", "Markdown"], [".csv", "CSV"]];
+const TYPES = [[".pdf", "PDF"], [".docx", "Word"], [".txt", "Text"], [".md", "Markdown"], [".csv", "CSV"], [".html", "HTML"],
+  [".py", "Python"], [".js", "JavaScript"], [".ts", "TypeScript"], [".json", "JSON"]];
 async function renderDocuments(r) {
   const cid = r.params.get("c") || "", type = r.params.get("t") || "";
   const qs = new URLSearchParams(); if (cid) qs.set("collection_id", cid); if (type) qs.set("type", type);
@@ -300,7 +304,7 @@ async function renderDocuments(r) {
     ${band([["Total documents", docs.length], ["Content pieces", pieces.toLocaleString()], ["Storage used", fmtBytes(docs.reduce((a, d) => a + d.size, 0))]])}
     <div class="filters">${ICON.folder}<select id="fCol"><option value="">All collections</option>${cols.map((c) => `<option value="${c.id}" ${String(c.id) === cid ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>
       ${ICON.file}<select id="fType"><option value="">All file types</option>${TYPES.map(([v, l]) => `<option value="${v}" ${v === type ? "selected" : ""}>${l}</option>`).join("")}</select></div>
-    <div class="drop" id="drop" data-act="upload">Drop PDF, Word, Markdown, text or CSV files here, or click to choose.</div>
+    <div class="drop" id="drop" data-act="upload">Drop PDF, Word, Markdown, text, CSV, HTML or code files here, or click to choose.</div>
     ${docs.length ? `<div class="grid">${docs.map((d) => docCard(d, cid)).join("")}</div>` : `<div class="empty"><h3>No documents${cid || type ? " match these filters" : " yet"}</h3>Upload files to start asking questions about them.</div>`}
   </div>`;
   const nav = () => { const p = new URLSearchParams(); if ($("#fCol").value) p.set("c", $("#fCol").value); if ($("#fType").value) p.set("t", $("#fType").value); go("#/documents" + (p.toString() ? "?" + p : "")); };
@@ -405,14 +409,17 @@ async function renderChat(r) {
   const [cols, status] = await Promise.all([api("/collections"), state.status ? Promise.resolve(state.status) : refreshStatus()]);
   const chat = id ? await api(`/chats/${id}`) : null;
   let last = null; try { last = Number(localStorage.getItem("daftar.lastCollection")); } catch { /* ignore */ }
-  const selected = chat ? chat.collection_id : (cols.find((c) => c.id === last) || cols[0] || {}).id;
-  const options = cols.map((c) => `<option value="${c.id}" ${c.id === selected ? "selected" : ""}>${esc(c.name)} · ${plural(c.documents, "document")}</option>`).join("");
+  let lastAll = false; try { lastAll = localStorage.getItem("daftar.lastCollection") === "all"; } catch { /* ignore */ }
+  const everything = chat ? !!chat.all_collections : lastAll;
+  const selected = everything ? null : chat ? chat.collection_id : (cols.find((c) => c.id === last) || cols[0] || {}).id;
+  const options = `<option value="all" ${everything ? "selected" : ""}>All collections</option>` +
+    cols.map((c) => `<option value="${c.id}" ${c.id === selected ? "selected" : ""}>${esc(c.name)} · ${plural(c.documents, "document")}</option>`).join("");
   const msgs = chat ? chat.messages : [];
   const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant");
   main.innerHTML = `<div class="chat">
     <div class="chat-head"><div class="chat-title">
         <button ${chat ? `data-act="rename-chat" data-id="${chat.id}" title="Rename chat"` : ""}>${esc(chat ? chat.title : "New chat")}</button>
-        ${cols.length ? `<select id="chatCol" title="Collection this chat searches">${chat && !chat.collection_id ? '<option value="">Pick a collection…</option>' : ""}${options}</select>` : ""}</div>
+        ${cols.length ? `<select id="chatCol" title="Collection this chat searches">${chat && !chat.collection_id && !chat.all_collections ? '<option value="">Pick a collection…</option>' : ""}${options}</select>` : ""}</div>
       <span class="badge" title="Model answering in this chat">${esc(status.chat_model || "no model")}</span></div>
     <div class="msgs" id="msgs">${msgs.length ? msgs.map((m, i) => msgHTML(m, { last: m === lastAssistant, question: questionFor(msgs, i) })).join("") : heroHTML(cols)}</div>
     <div class="composer"><form id="askForm"><textarea id="q" rows="1" placeholder="${cols.length ? "Ask anything about your documents…" : "Create a collection first"}" ${cols.length ? "" : "disabled"}></textarea>
@@ -428,7 +435,8 @@ async function renderChat(r) {
   const sel = $("#chatCol");
   if (sel) sel.onchange = async () => {
     try { localStorage.setItem("daftar.lastCollection", sel.value); } catch { /* ignore */ }
-    if (chat) { await api(`/chats/${chat.id}`, { method: "PATCH", body: { collection_id: Number(sel.value) || null } }).catch(fail); loadChats(); }
+    const body = sel.value === "all" ? { all_collections: true } : { collection_id: Number(sel.value) || null };
+    if (chat) { await api(`/chats/${chat.id}`, { method: "PATCH", body }).catch(fail); loadChats(); }
   };
   $("#askForm").onsubmit = async (e) => {
     e.preventDefault();
@@ -438,7 +446,7 @@ async function renderChat(r) {
     let chatId = chat && chat.id;
     if (!chatId) {
       if (!sel || !sel.value) return toast("Pick a collection first", true);
-      const created = await api("/chats", { method: "POST", body: { collection_id: Number(sel.value) } }).catch(fail);
+      const created = await api("/chats", { method: "POST", body: sel.value === "all" ? { all_collections: true } : { collection_id: Number(sel.value) } }).catch(fail);
       if (!created) return;
       chatId = created.id;
       history.replaceState(null, "", `#/chat/${chatId}`);
@@ -462,8 +470,7 @@ function sourcesHTML(sources, question) {
   return `<button class="src-toggle" data-act="toggle-sources"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v.01M11 12h1v4h1"/></svg>${plural(sources.length, "source")}</button>
     <div class="sources">${sources.map((s, i) => `<div class="src" data-n="${i + 1}">
       <div class="src-head"><span class="n">[${i + 1}]</span><button class="doc" data-act="preview" data-id="${s.document_id}" data-q="${esc(question)}" title="Open in preview">${esc(s.document)}</button>
-        <span class="sub">${esc(s.collection || "")}${s.ext === ".pdf" ? ` · page ${s.page}` : ""}</span>
-        <span class="match" title="How closely this passage matches the question">${meter(s.match)}${s.match}% match</span></div>
+        <span class="sub">${where(s)}</span>${matchLabel(s)}</div>
       <div class="snip" data-act="expand-src">${highlight(esc(s.text), question)}</div></div>`).join("")}</div>`;
 }
 function msgHTML(m, { last = false, question = "" } = {}) {
@@ -523,7 +530,7 @@ async function renderSearch(r) {
   $("#results").innerHTML = `<p class="sub">${plural(res.results.length, "passage")} · ${res.mode} search</p>` + (res.results.length
     ? `<div class="sources">${res.results.map((s) => `<div class="src">
         <div class="src-head"><button class="doc" data-act="preview" data-id="${s.document_id}" data-q="${esc(q)}">${esc(s.document)}</button>
-        <span class="sub">${esc(s.collection)}${s.ext === ".pdf" ? ` · page ${s.page}` : ""}</span><span class="match">${meter(s.match)}${s.match}% match</span></div>
+        <span class="sub">${where(s)}</span>${matchLabel(s)}</div>
         <div class="snip" data-act="expand-src">${highlight(esc(s.text), q)}</div></div>`).join("")}</div>`
     : `<div class="empty"><h3>Nothing found</h3>Try other words, or check that the documents finished indexing.</div>`);
 }

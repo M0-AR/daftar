@@ -9,9 +9,9 @@ stays in a local data folder; the app only talks to your local [Ollama].
 ## Features
 - **Collections**: separate knowledge bases; one file can be in several, each with its own index.
   Readiness %, status check and one-click "optimize search".
-- **Documents**: PDF, Word, Markdown, text, CSV; drag & drop; filters by collection and type; preview
+- **Documents**: PDF, Word, Markdown, text, CSV, HTML, notebooks and 40+ code formats; drag & drop; filters by collection and type; preview
   with word count and reading time; export as PDF, DOCX, Markdown, text or HTML.
-- **Chat**: streamed answers, `[n]` citations, sources with match %, edit / copy / regenerate / delete
+- **Chat**: one collection or all of them; streamed answers, `[n]` citations, sources with section and match %, edit / copy / regenerate / delete
   messages, rename chats, search all conversations.
 - **Search**: find passages without asking the AI.
 - **Settings in plain language**: creativity (0–2), passages to use / scan, text block size / overlap,

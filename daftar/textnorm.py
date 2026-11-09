@@ -46,8 +46,34 @@ def stem(word: str) -> str:
     return word
 
 
+CASE_PARTS = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
+SPLITTABLE = re.compile(r"_|[a-z][A-Z]|[A-Z]{2}[a-z]")
+
+
+def identifier_parts(word: str) -> list[str]:
+    """getUserName → get, User, Name; refresh_access_token → refresh, access, token; HTTPServer → HTTP, Server.
+    Split before case folding; callers keep the whole identifier too (arXiv 2605.18561)."""
+    if not SPLITTABLE.search(word):
+        return []
+    parts = [p for piece in word.split("_") for p in CASE_PARTS.findall(piece)]
+    return parts if len(parts) > 1 else []
+
+
+def _words(text: str) -> list[str]:
+    # Marks are removed before splitting: Python's \w does not match Arabic harakat.
+    return WORD.findall(AR_MARKS.sub("", unicodedata.normalize("NFKC", text)))
+
+
+def _fold(word: str) -> str:
+    return word.casefold().translate(AR_FOLD)
+
+
 def tokens(text: str) -> list[str]:
-    return [stem(w) for w in WORD.findall(normalize(text))]
+    out = []
+    for w in _words(text):
+        out.append(stem(_fold(w)))
+        out.extend(stem(_fold(p)) for p in identifier_parts(w))
+    return out
 
 
 def index_text(text: str) -> str:
@@ -58,9 +84,11 @@ def index_text(text: str) -> str:
 def terms(question: str) -> list[str]:
     """Distinct meaningful query terms (stop words removed before stemming)."""
     out = []
-    for w in WORD.findall(normalize(question)):
-        if len(w) > 1 and w not in STOP:
-            out.append(stem(w))
+    for w in _words(question):
+        folded = _fold(w)
+        if len(folded) > 1 and folded not in STOP:
+            out.append(stem(folded))
+        out.extend(stem(_fold(p)) for p in identifier_parts(w) if _fold(p) not in STOP)
     return list(dict.fromkeys(t for t in out if len(t) > 1))
 
 

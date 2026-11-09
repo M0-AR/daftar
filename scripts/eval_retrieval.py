@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from daftar.ingest import chunk_pages  # noqa: E402
+from daftar.ingest import chunk_sections  # noqa: E402
 from daftar.rag import Retriever  # noqa: E402
 from daftar.store import Store  # noqa: E402
 
@@ -123,6 +123,83 @@ QUESTIONS = [
 ]
 
 
+# --- structure set: section headings and code identifiers ---------------------------------------
+_F = "This rule was approved by the board in March and is reviewed every year by the people team. Questions go to the people team mailbox, and changes are announced in the monthly newsletter. " * 5
+HANDBOOK = f"""# Staff Handbook
+
+## Remote Work
+{_F}
+Employees may perform their duties from home up to three days per week, provided their manager agrees in advance.
+
+## Parental Leave
+{_F}
+Birth mothers receive sixteen weeks at full pay; the second parent receives six weeks at full pay.
+
+## Travel Expenses
+{_F}
+Flights are booked in economy class unless the journey is longer than nine hours.
+
+## Security Incidents
+{_F}
+A lost laptop or phone must be reported to the help desk within two hours.
+"""
+
+AUTH_PY = """import time
+
+def refresh_access_token(client, refresh_token):
+    response = client.post("/oauth/token", data={"grant_type": "refresh_token", "refresh_token": refresh_token})
+    return response.json()["access_token"]
+
+def revoke_all_grants(client, user_id):
+    client.delete(f"/oauth/users/{user_id}/grants")
+"""
+SESSION_JS = """export function validateSession(sessionId, now = Date.now()) {
+  if (!sessionId) return false;
+  return cache.get(sessionId)?.expiresAt > now;
+}
+
+export function buildLoginUrl(redirectUri) {
+  return `/sso/start?redirect=${encodeURIComponent(redirectUri)}`;
+}
+"""
+LIMITS_JS = """export class RateLimiter {
+  constructor(maxPerMinute) { this.maxPerMinute = maxPerMinute; this.hits = []; }
+  allow(now = Date.now()) {
+    this.hits = this.hits.filter(t => now - t < 60000);
+    if (this.hits.length >= this.maxPerMinute) return false;
+    this.hits.push(now); return true;
+  }
+}
+"""
+CONFIG_PY = """import json
+
+class TokenStore:
+    def __init__(self, path):
+        self.path = path
+
+    def load(self):
+        with open(self.path) as f:
+            return json.load(f)
+
+def parse_config(path):
+    return json.loads(open(path).read())
+"""
+
+STRUCT_DOCS = {"handbook.md": HANDBOOK, "auth.py": AUTH_PY, "session.js": SESSION_JS, "limits.js": LIMITS_JS, "config.py": CONFIG_PY}
+STRUCT_QUESTIONS = [
+    ("What is the remote work policy?", "up to three days per week"),
+    ("How long is parental leave?", "sixteen weeks"),
+    ("What are the rules for travel expenses?", "economy class"),
+    ("How are security incidents handled?", "within two hours"),
+    ("Which function refreshes the access token?", "def refresh_access_token"),
+    ("How is the login URL built?", "function buildLoginUrl"),
+    ("Which class limits the request rate?", "class RateLimiter"),
+    ("Where is the session validated?", "function validateSession"),
+    ("What loads the token store?", "class TokenStore"),
+    ("How are all grants revoked?", "def revoke_all_grants"),
+]
+
+
 def normalize(text: str) -> str:
     """Comparison-only normalization (independent of the code under test)."""
     import re
@@ -133,26 +210,28 @@ def normalize(text: str) -> str:
     return text.replace("\u0629", "\u0647").replace("\u0649", "\u064a")
 
 
-def build(size: int, overlap: int, embed_fn=None):
+def build(size: int, overlap: int, embed_fn=None, docs=None):
+    docs = docs or DOCS
     tmp = tempfile.TemporaryDirectory()
     store = Store(Path(tmp.name) / "eval.db")
     store.run("INSERT INTO collections(name, created) VALUES ('eval', 0)")
-    for i, (name, text) in enumerate(DOCS.items(), 1):
+    for i, (name, text) in enumerate(docs.items(), 1):
         store.run("INSERT INTO documents(name, ext, size, sha256, created) VALUES (?,?,?,?,0)", (name, ".txt", len(text), str(i)))
         eid = store.run("INSERT INTO entries(document_id, collection_id, status, created, embed_model) VALUES (?,1,'ready',0,?)",
                         (i, "eval-embed" if embed_fn else None))
-        chunks = chunk_pages([(1, text)], size, overlap)
+        chunks = chunk_sections([(1, text)], size, overlap)
         ids = store.replace_chunks(eid, chunks)
         if embed_fn:
-            store.set_embeddings(ids, embed_fn([t for _, t in chunks], query=False))
+            store.set_embeddings(ids, embed_fn([(f"{c[2]}\n" if c[2] else "") + c[1] for c in chunks], query=False))
     return tmp, store
 
 
-def evaluate(size=1600, overlap=240, k=4, rerank=True, embed_fn=None, verbose=False):
-    tmp, store = build(size, overlap, embed_fn)
+def evaluate(size=1600, overlap=240, k=4, rerank=True, embed_fn=None, verbose=False, structure=False):
+    docs, questions = (STRUCT_DOCS, STRUCT_QUESTIONS) if structure else (DOCS, QUESTIONS)
+    tmp, store = build(size, overlap, embed_fn, docs)
     retriever = Retriever(store)
     hits, rr, misses = 0, 0.0, []
-    for q, expect in QUESTIONS:
+    for q, expect in questions:
         vec = embed_fn([q], query=True)[0] if embed_fn else None
         results, _ = retriever.search(q, 1, k, 24, vec, "eval-embed" if embed_fn else None, rerank)
         want = normalize(expect)
@@ -163,7 +242,7 @@ def evaluate(size=1600, overlap=240, k=4, rerank=True, embed_fn=None, verbose=Fa
         else:
             misses.append(q)
     tmp.cleanup()
-    n = len(QUESTIONS)
+    n = len(questions)
     if verbose and misses:
         print("   missed:", *misses, sep="\n     ")
     return {"recall@k": round(hits / n, 3), "mrr": round(rr / n, 3), "n": n}
@@ -188,3 +267,6 @@ if __name__ == "__main__":
             r = evaluate(size, overlap, args.k, rerank, embed, verbose=(size, rerank) == (1600, True))
             print(f"chunk {size:>4}/{overlap:<3} rerank={str(rerank):5} recall@{args.k}={r['recall@k']:.3f}  MRR={r['mrr']:.3f}")
     print(f"({len(QUESTIONS)} questions, {time.time() - t:.1f}s)")
+    for size, overlap in ((1000, 150),):
+        r = evaluate(size, overlap, args.k, True, embed, verbose=True, structure=True)
+        print(f"STRUCTURE set ({r['n']} q) chunk {size}/{overlap}: recall@{args.k}={r['recall@k']:.3f}  MRR={r['mrr']:.3f}")
