@@ -23,6 +23,7 @@ from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
 from daftar.ingest import SUPPORTED, chunk_sections, clean_pdf_text, extract, page_image_png, scanned_pages, word_count
 from daftar.ollama import LOOPBACK, Ollama, check_url, prefixes
+from daftar.openai_compat import OpenAICompat, detect_servers
 from daftar.rag import Retriever, fit_prompt
 from daftar.store import Store
 
@@ -114,7 +115,7 @@ class PullIn(BaseModel):
     name: str
 
 
-def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
+def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=OpenAICompat) -> FastAPI:
     home = home or data_dir()
     files_dir = home / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
@@ -131,6 +132,9 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
 
     def ollama():
+        """The model engine the user chose: Ollama, or any OpenAI-compatible server."""
+        if settings["engine"] == "openai":
+            return openai_factory(settings["openai_url"], settings["allow_remote_ollama"], settings["openai_key"])
         return ollama_factory(settings["ollama_url"], settings["allow_remote_ollama"])
 
     def file_path(doc: dict) -> Path:
@@ -281,6 +285,8 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
         return meta_cache[key]
 
     def can_chat(client, name: str) -> bool:
+        if "ocr" in name.lower():  # OCR models read pages; they are not conversation models
+            return False
         caps = model_meta(client, name)["capabilities"]
         return "completion" in caps if caps else "embed" not in name  # old Ollama: fall back to the name
 
@@ -339,16 +345,20 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
     def put_settings(changes: dict):
         allow = changes.get("allow_remote_ollama", settings["allow_remote_ollama"])
         allow = allow if isinstance(allow, bool) else str(allow).lower() in ("1", "true", "on", "yes")
-        if "ollama_url" in changes:
-            try:
-                changes["ollama_url"] = check_url(str(changes["ollama_url"]), allow)
-            except ValueError as e:
-                raise HTTPException(400, str(e))
-        elif not allow:
-            try:
-                check_url(settings["ollama_url"], False)
-            except ValueError:
-                changes["ollama_url"] = "http://127.0.0.1:11434"  # turning remote off snaps back to local
+        for key, local in (("ollama_url", "http://127.0.0.1:11434"), ("openai_url", "http://127.0.0.1:1234")):
+            if key in changes:
+                try:
+                    changes[key] = check_url(str(changes[key]), allow)
+                except ValueError as e:
+                    raise HTTPException(400, str(e))
+            elif not allow:
+                try:
+                    check_url(settings[key], False)
+                except ValueError:
+                    changes[key] = local  # turning remote off snaps back to this computer
+        if any(k in changes for k in ("engine", "ollama_url", "openai_url", "openai_key")):
+            meta_cache.clear()
+            embed_cache.update(at=0.0)
         log.info("settings changed: %s", ", ".join(sorted(changes)))
         return settings.update(changes)
 
@@ -379,6 +389,11 @@ def create_app(home: Path | None = None, ollama_factory=Ollama) -> FastAPI:
                 log.warning("model download %s failed: %s", name, e)
                 yield json.dumps({"error": str(e), "done": True}) + "\n"
         return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+    @app.get("/api/engines/detect")
+    def detect_engines():
+        """Local AI servers answering on their usual addresses (Ollama, LM Studio, Jan, llama.cpp, vLLM...)."""
+        return detect_servers()
 
     @app.get("/api/logs")
     def logs():

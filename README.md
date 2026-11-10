@@ -23,7 +23,8 @@ stays in a local data folder; the app only talks to your local [Ollama].
 See [docs/GAP.md](docs/GAP.md) for the feature checklist this build was verified against.
 
 ## Run
-Requires Python 3.11+ and Ollama running locally.
+Requires Python 3.11+ and a local AI engine: Ollama, or any OpenAI-compatible app (LM Studio, Jan,
+llama.cpp's llama-server, vLLM, LocalAI, KoboldCpp). Pick it under Settings → AI engine.
 
 ```bash
 uv venv --system-site-packages .venv        # Linux: system GTK/WebKit for the native window

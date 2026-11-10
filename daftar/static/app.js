@@ -553,7 +553,7 @@ async function renderSettings() {
       <div class="actions"><button class="btn ghost" data-act="reset-settings">Reset to defaults</button></div></div>
     <div class="cols"><div>
       <div class="panel"><h2>AI model</h2>
-        <div class="pill" style="margin-bottom:14px">${s.ollama ? `<span class="dot ok"></span>Ollama ${esc(s.ollama_version)} is running` : `<span class="dot err"></span>Ollama is not reachable`}</div>
+        <div class="pill" style="margin-bottom:14px">${s.ollama ? `<span class="dot ok"></span>${cfg.engine === "openai" ? "Connected to your OpenAI-compatible AI app" : `Ollama ${esc(s.ollama_version)} is running`}` : `<span class="dot err"></span>${cfg.engine === "openai" ? "Your AI app is not reachable at " + esc(cfg.openai_url) : "Ollama is not reachable"}`}</div>
         ${s.compute === "cpu" ? `<p class="sub err-text" style="margin-top:-6px">Ollama is running models on the <b>processor only</b> (nothing in GPU memory), so answers and scanned-page reading are slow. If this computer has a graphics card, reinstall Ollama with its GPU libraries (see Help).</p>`
           : s.compute === "partial" ? `<p class="sub" style="margin-top:-6px">The model only partly fits in GPU memory; a smaller model or shorter context will be faster.</p>` : ""}
         <div class="field"><label>Chat model</label><select data-setting="chat_model">${opts(chatModels, cfg.chat_model)}</select>
@@ -562,10 +562,10 @@ async function renderSettings() {
           <span class="hint">${!s.embed_ready ? "No search model installed: search matches words only, not meaning."
             : s.embed_active !== cfg.embed_model.replace(/:latest$/, "") ? `Not installed, so Daftar uses <b>${esc(s.embed_active)}</b> for meaning-based search.` : "Meaning-based search is on."}</span></div>
         <div class="field"><label>Download a model</label><div class="row"><input type="text" id="pullName" placeholder="e.g. gemma3:1b or nomic-embed-text" style="flex:1">
-          <button class="btn" data-act="pull">Download</button></div>
+          <button class="btn" data-act="pull" ${cfg.engine === "openai" ? "disabled title=\"Download models in your AI app, then pick them here\"" : ""}>Download</button></div>
           <span class="hint">This is the one action that uses the internet: Ollama fetches the model from its library. Your documents are never sent.</span>
           <div class="progress" id="pullProgress" hidden><div class="row" style="justify-content:space-between"><span class="sub" id="pullStatus"></span><span class="sub" id="pullPct"></span></div><div class="meter"><i id="pullBar" style="width:0"></i></div></div></div>
-        ${models.length ? `<div class="models">${models.map((m) => `<div><span>${esc(m.name)}</span><span>${esc(m.parameters)} ${fmtBytes(m.size)}</span></div>`).join("")}</div>` : ""}
+        ${models.length ? `<div class="models">${models.map((m) => `<div><span>${esc(m.name)}</span><span>${esc(m.parameters)} ${m.size ? fmtBytes(m.size) : ""}</span></div>`).join("")}</div>` : ""}
       </div>
       <div class="panel"><h2>Answers</h2>
         <div class="field"><label>Creativity level: <span id="tempVal">${Number(cfg.temperature).toFixed(1)}</span></label>
@@ -584,8 +584,18 @@ async function renderSettings() {
         ${num("chunk_overlap", "Text block overlap", "Characters shared between neighbouring blocks, so sentences are not cut off.", 0, 1000, 10)}
         ${s.stale_entries ? `<p class="sub">${plural(s.stale_entries, "document index")} use older settings or no search model.</p><button class="btn" data-act="reindex-all">Re-index now</button>` : '<p class="hint">All documents use the current settings.</p>'}
       </div>
-      <div class="panel"><h2>Connection</h2>
-        <div class="field"><label>Ollama server address</label><input type="text" data-setting="ollama_url" value="${esc(cfg.ollama_url)}"></div>
+      <div class="panel"><h2>AI engine</h2>
+        <div class="field"><label>Run the models with</label><select data-setting="engine">
+          <option value="ollama" ${cfg.engine !== "openai" ? "selected" : ""}>Ollama</option>
+          <option value="openai" ${cfg.engine === "openai" ? "selected" : ""}>Another app (OpenAI-compatible): LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp…</option></select>
+          <span class="hint">Use whichever local AI app you already have. Your documents stay on this computer either way.</span></div>
+        ${cfg.engine === "openai" ? `
+        <div class="field"><label>Server address</label><input type="text" data-setting="openai_url" value="${esc(cfg.openai_url)}">
+          <span class="hint">LM Studio :1234, Jan :1337, llama.cpp :8080, vLLM :8000, KoboldCpp :5001. The context window is set in that app.</span></div>
+        <div class="field"><label>API key <span class="hint">(only if your server requires one)</span></label><input type="text" data-setting="openai_key" value="${esc(cfg.openai_key)}" autocomplete="off"></div>`
+        : `<div class="field"><label>Ollama server address</label><input type="text" data-setting="ollama_url" value="${esc(cfg.ollama_url)}"></div>`}
+        <div class="row" style="margin-bottom:12px"><button class="btn small" data-act="detect">Find AI apps running on this computer</button></div>
+        <div id="detected"></div>
         ${sw("allow_remote_ollama", "Allow a server on another computer", "Only for a server you control. Your documents and questions will be sent to it.")}
       </div>
       <div class="panel"><h2>Appearance &amp; advanced</h2>
@@ -606,7 +616,7 @@ async function renderSettings() {
       try {
         await api("/settings", { method: "PUT", body: { [key]: value } });
         toast("Saved");
-        if (["chunk_size", "chunk_overlap", "embed_model", "chat_model", "debug", "allow_remote_ollama", "ollama_url"].includes(key)) render();
+        if (["chunk_size", "chunk_overlap", "embed_model", "chat_model", "debug", "allow_remote_ollama", "ollama_url", "engine", "openai_url", "openai_key", "ocr_model"].includes(key)) render();
         else refreshStatus();
       } catch (err) { fail(err); render(); }
     };
@@ -658,6 +668,7 @@ async function renderHelp() {
       <div class="panel"><h2>Troubleshooting</h2><ul>
         <li><b>“Ollama not running”</b>: start Ollama, then reopen Daftar.</li>
         <li><b>“CPU only”</b>: Ollama found no GPU libraries. Reinstall Ollama from its official package (it includes the NVIDIA/AMD runtimes), restart it, and check that <code>ollama ps</code> shows “100% GPU”.</li>
+        <li><b>Prefer LM Studio, Jan, llama.cpp or vLLM?</b> Start its local server, then Settings → AI engine → “Find AI apps running on this computer” → Use.</li>
         <li><b>Scanned PDFs and photos</b>: install a vision model for reading text, e.g. PaddleOCR-VL, and pick it under Settings → Reading scanned pages.</li>
 
         <li><b>Model not installed</b>: download it in Settings, or run <code>ollama pull &lt;name&gt;</code>.</li></ul></div>
@@ -775,6 +786,20 @@ document.body.addEventListener("click", async (e) => {
         break;
       case "pull": await pullModel(); break;
       case "logs": await loadLogs(); break;
+      case "detect": {
+        a.disabled = true; $("#detected").innerHTML = '<p class="sub">Looking…</p>';
+        const found = await api("/engines/detect");
+        $("#detected").innerHTML = found.length ? `<div class="sources" style="margin-bottom:12px">${found.map((f) => `<div class="src row" style="justify-content:space-between">
+          <span><b>${esc(f.name)}</b> <span class="sub">${esc(f.url)} · ${plural(f.models, "model")}</span></span>
+          <button class="btn small primary" data-act="use-engine" data-name="${esc(f.name)}" data-url="${esc(f.url)}">Use</button></div>`).join("")}</div>`
+          : '<p class="sub">No AI app answered on the usual addresses. Start Ollama, LM Studio (Developer → Start server), Jan (Local API Server) or llama-server, then try again.</p>';
+        a.disabled = false;
+        break;
+      }
+      case "use-engine": {
+        const body = a.dataset.name === "Ollama" ? { engine: "ollama", ollama_url: a.dataset.url } : { engine: "openai", openai_url: a.dataset.url };
+        await api("/settings", { method: "PUT", body }); toast(`Using ${a.dataset.name}`); render(); break;
+      }
     }
   } catch (err) { fail(err); }
 });

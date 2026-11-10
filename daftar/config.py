@@ -5,7 +5,10 @@ import sys
 from pathlib import Path
 
 DEFAULTS = {
+    "engine": "ollama",             # "ollama" or "openai" (LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp...)
     "ollama_url": "http://127.0.0.1:11434",
+    "openai_url": "http://127.0.0.1:1234",
+    "openai_key": "",
     "allow_remote_ollama": False,   # a server on another machine means documents leave this one
     "chat_model": "gemma3:1b",
     "embed_model": "qwen3-embedding:0.6b",  # multilingual incl. Arabic dialects; any installed embedder is used if missing
@@ -56,6 +59,8 @@ def clean(changes: dict) -> dict:
         else:
             value = str(value).strip()
         out[key] = value
+    if "engine" in out and out["engine"] not in ("ollama", "openai"):
+        out["engine"] = "ollama"
     if "theme" in out and out["theme"] not in ("dark", "light"):
         out["theme"] = "dark"
     return out

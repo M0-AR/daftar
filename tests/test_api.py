@@ -603,3 +603,13 @@ def test_cpu_only_ollama_is_reported(api, fake):
     assert api.c.get("/api/status").json()["compute"] == "gpu"
     fake.loaded = [{"name": "big:27b", "size": 1200, "size_vram": 600}]
     assert api.c.get("/api/status").json()["compute"] == "partial"
+
+
+def test_ocr_models_are_never_used_for_chat(api, fake):
+    """PaddleOCR-VL reports 'completion'; it must not be offered or picked as a chat model."""
+    fake.models_installed = ["paddleocr-vl:1.6", "tiny-chat:latest", "nomic-embed-text:latest"]
+    real = fake.model_list
+    fake.model_list = lambda self: [{**m, "size": {"paddleocr-vl:1.6": 2000, "tiny-chat:latest": 500}.get(m["name"], 1)} for m in real(self)]
+    status = api.c.get("/api/status").json()
+    assert status["chat_model"] == "tiny-chat:latest" and "paddleocr-vl:1.6" not in status["chat_models"]
+    assert status["ocr_active"] == "paddleocr-vl:1.6"

@@ -200,6 +200,20 @@ STRUCT_QUESTIONS = [
 ]
 
 
+# --- paraphrase set: the question avoids the document's own words (what semantic search is for) --
+PARAPHRASE_QUESTIONS = [
+    ("How much warning do I have to give if I simply want out of the deal?", "ninety days written notice"),
+    ("What extra charge applies when a bill is settled after the deadline?", "1.5 percent per month"),
+    ("Can the consultant keep using its own software toolkit after the project?", "pre-existing tools"),
+    ("Which courts handle a disagreement?", "courts of London"),
+    ("If someone's private information leaks, how quickly must the client be told?", "forty-eight hours"),
+    ("Does a short daytime snooze help me remember things for exams?", "did not improve long-term retention"),
+    ("Why were heavy coffee drinkers left out of some studies?", "delays sleep onset"),
+    ("متى تصبح السلعة ملكا للعميل في نهاية العقد؟", "تنتقل الملكيه في اخر المده"),
+    ("من يدفع تكاليف إصلاح الأعطال الكبيرة في الأصل المؤجر؟", "يتحمل المؤجر صيانه الاصل"),
+    ("هل يدفع المستأجر الإيجار إذا تلف الأصل بالكامل؟", "سقطت الاجره"),
+]
+
 def normalize(text: str) -> str:
     """Comparison-only normalization (independent of the code under test)."""
     import re
@@ -226,8 +240,10 @@ def build(size: int, overlap: int, embed_fn=None, docs=None):
     return tmp, store
 
 
-def evaluate(size=1600, overlap=240, k=4, rerank=True, embed_fn=None, verbose=False, structure=False):
+def evaluate(size=1600, overlap=240, k=4, rerank=True, embed_fn=None, verbose=False, structure=False, paraphrase=False):
     docs, questions = (STRUCT_DOCS, STRUCT_QUESTIONS) if structure else (DOCS, QUESTIONS)
+    if paraphrase:
+        questions = PARAPHRASE_QUESTIONS
     tmp, store = build(size, overlap, embed_fn, docs)
     retriever = Retriever(store)
     hits, rr, misses = 0, 0.0, []
@@ -258,9 +274,10 @@ def ollama_embedder(model="nomic-embed-text"):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--embed", action="store_true")
+    ap.add_argument("--embed-model", default="qwen3-embedding:0.6b")
     ap.add_argument("-k", type=int, default=4)
     args = ap.parse_args()
-    embed = ollama_embedder() if args.embed else None
+    embed = ollama_embedder(args.embed_model) if args.embed else None
     t = time.time()
     for size, overlap in ((500, 75), (1000, 150), (1600, 240), (2400, 360)):
         for rerank in (False, True):
@@ -270,3 +287,5 @@ if __name__ == "__main__":
     for size, overlap in ((1000, 150),):
         r = evaluate(size, overlap, args.k, True, embed, verbose=True, structure=True)
         print(f"STRUCTURE set ({r['n']} q) chunk {size}/{overlap}: recall@{args.k}={r['recall@k']:.3f}  MRR={r['mrr']:.3f}")
+        r = evaluate(size, overlap, args.k, True, embed, verbose=True, paraphrase=True)
+        print(f"PARAPHRASE set ({r['n']} q) chunk {size}/{overlap}: recall@{args.k}={r['recall@k']:.3f}  MRR={r['mrr']:.3f}")
