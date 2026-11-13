@@ -620,6 +620,16 @@ async function renderSettings() {
         ${num("chunk_overlap", "Text block overlap", "Characters shared between neighbouring blocks, so sentences are not cut off.", 0, 1000, 10)}
         ${s.stale_entries ? `<p class="sub">${plural(s.stale_entries, "document index")} use older settings or no search model.</p><button class="btn" data-act="reindex-all">Re-index now</button>` : '<p class="hint">All documents use the current settings.</p>'}
       </div>
+      <div class="panel"><h2>Backup &amp; portability</h2>
+        <p class="hint" style="margin-top:-4px">Your whole library — documents, originals, chats and index — in one file you control.</p>
+        <div class="row" style="margin-bottom:10px"><button class="btn primary" data-act="export-library">Export library</button><button class="btn" data-act="import-library">Import library…</button><input type="file" id="libraryFile" accept=".daftar" hidden></div>
+        <div class="field"><label>Backup folder</label><input type="text" data-setting="backup_dir" value="${esc(cfg.backup_dir)}" placeholder="${esc(s.data_dir + "/backups")}"><span class="hint">Empty uses the data folder. Automatic backups are written here.</span></div>
+        ${sw("backup_auto", "Back up automatically", "Once a day while Daftar runs. Keeps the last 7 daily and 4 weekly backups.")}
+        <div class="row" style="justify-content:space-between;margin:14px 0 6px"><b style="font-size:13px">Backups</b><button class="btn small" data-act="backup-now">Back up now</button></div>
+        <div id="backupList" class="models">Loading…</div>
+        <div class="field" style="margin:10px 0 0"><span class="label">Folder</span><code id="backupFolder" style="word-break:break-all;font-size:12px">…</code></div>
+        <p class="hint">Import replaces this library. Daftar makes a safety backup first, so a wrong choice can be undone.</p>
+      </div>
       <div class="panel"><h2>AI engine</h2>
         <div class="field"><label>Run the models with</label><select data-setting="engine">
           <option value="ollama" ${cfg.engine === "ollama" ? "selected" : ""}>Ollama</option>
@@ -661,7 +671,7 @@ async function renderSettings() {
       try {
         await api("/settings", { method: "PUT", body: { [key]: value } });
         toast("Saved");
-        if (["chunk_size", "chunk_overlap", "embed_model", "chat_model", "debug", "allow_remote_ollama", "ollama_url", "engine", "openai_url", "openai_key", "ocr_model", "llama_binary", "llama_model"].includes(key)) render();
+        if (["chunk_size", "chunk_overlap", "embed_model", "chat_model", "debug", "allow_remote_ollama", "ollama_url", "engine", "openai_url", "openai_key", "ocr_model", "llama_binary", "llama_model", "backup_dir", "backup_auto"].includes(key)) render();
         else refreshStatus();
       } catch (err) { fail(err); render(); }
     };
@@ -669,7 +679,35 @@ async function renderSettings() {
     if (el.type === "range") el.addEventListener("input", () => ($("#tempVal").textContent = Number(el.value).toFixed(1)));
   });
   $("#darkMode").onchange = async (e) => { const theme = e.target.checked ? "dark" : "light"; applyTheme(theme); await api("/settings", { method: "PUT", body: { theme } }).catch(fail); refreshStatus(); };
+  renderBackups();
+  const libraryFile = $("#libraryFile");
+  if (libraryFile) libraryFile.onchange = async () => {
+    const selected = libraryFile.files[0];
+    libraryFile.value = "";
+    if (!selected) return;
+    if (!await confirmBox("Replace this library?", `Import “${selected.name}” and replace the current documents, chats and index? A safety backup is made first.`, "Import")) return;
+    const form = new FormData();
+    form.append("file", selected);
+    try {
+      const r = await api("/library/import", { method: "POST", body: form });
+      toast(`Restored ${plural(r.counts.documents, "document")} and ${plural(r.counts.chats, "chat")}`);
+      state.status = null; state.chats = null;
+      await Promise.all([refreshStatus(), loadChats().catch(() => {})]);
+      render();
+    } catch (err) { fail(err); }
+  };
   if (cfg.debug) loadLogs();
+}
+async function renderBackups() {
+  const list = $("#backupList");
+  if (!list) return;
+  try {
+    const b = await api("/backups");
+    const folder = $("#backupFolder");
+    if (folder) folder.textContent = b.folder;
+    list.innerHTML = b.items.length ? b.items.map((x) => `<div><span><b>${esc(x.name)}</b><br><span class="sub">${fmtBytes(x.size)} · ${ago(x.mtime)}</span></span><span class="row"><a class="btn small" href="/api/backups/download?name=${encodeURIComponent(x.name)}" download>Download</a><button class="btn small" data-act="restore-backup" data-name="${esc(x.name)}">Restore</button></span></div>`).join("")
+      : '<p class="sub" style="margin:0">No backups yet. One is made automatically each day while Daftar runs.</p>';
+  } catch (err) { list.innerHTML = `<p class="hint err-text" style="margin:0">${esc(err.message)}</p>`; }
 }
 async function loadLogs() { const el = $("#logs"); if (!el) return; const { lines } = await api("/logs"); el.textContent = lines.join("\n") || "(empty)"; el.scrollTop = el.scrollHeight; }
 async function pullStream(name, show) {
@@ -844,6 +882,36 @@ document.body.addEventListener("click", async (e) => {
           await api("/settings/reset", { method: "POST" }); toast("Settings reset"); render();
         }
         break;
+      case "export-library": {
+        const link = document.createElement("a");
+        link.href = "/api/library/export"; link.download = "Daftar-library.daftar";
+        document.body.append(link); link.click(); link.remove();
+        toast("Preparing library export…");
+        break;
+      }
+      case "import-library": $("#libraryFile").click(); break;
+      case "backup-now": {
+        a.disabled = true;
+        try {
+          const r = await api("/backups", { method: "POST" });
+          toast(`Backup created (${fmtBytes(r.size)})`);
+          await renderBackups();
+        } finally { a.disabled = false; }
+        break;
+      }
+      case "restore-backup": {
+        const name = a.dataset.name;
+        if (!await confirmBox("Restore this backup?", `Replace the current library with “${name}”? A safety backup of the current library is made first.`, "Restore")) break;
+        a.disabled = true;
+        try {
+          const r = await api("/backups/restore", { method: "POST", body: { name } });
+          toast(`Restored ${plural(r.counts.documents, "document")} and ${plural(r.counts.chats, "chat")}`);
+          state.status = null; state.chats = null;
+          await Promise.all([refreshStatus(), loadChats().catch(() => {})]);
+          render();
+        } finally { a.disabled = false; }
+        break;
+      }
       case "pull": await pullModel(); break;
       case "logs": await loadLogs(); break;
       case "setup-pull": {

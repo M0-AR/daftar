@@ -18,47 +18,49 @@ $$("#mobileMenu a").forEach(a => a.addEventListener("click", () => {
 }));
 
 (function openDesktopApp() {
-  const link = $("#openApp");
   const fallback = $("#appFallback");
-  if (!link || !fallback) return;
+  const links = [$("#openApp"), $("#openBrowser")].filter(Boolean);
+  if (!links.length || !fallback) return;
   let active = null;
 
-  link.addEventListener("click", event => {
-    event.preventDefault();
-    if (active) active.cancel();
-    let settled = false;
-    let timer = 0;
-    fallback.hidden = true;
-    link.classList.add("is-launching");
-    link.setAttribute("aria-busy", "true");
+  links.forEach(link => {
+    link.addEventListener("click", event => {
+      event.preventDefault();
+      if (active) active.cancel();
+      let settled = false;
+      let timer = 0;
+      fallback.hidden = true;
+      link.classList.add("is-launching");
+      link.setAttribute("aria-busy", "true");
 
-    const cleanup = () => {
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("blur", onBlur);
-      clearTimeout(timer);
-      link.classList.remove("is-launching");
-      link.removeAttribute("aria-busy");
-    };
-    const finish = ok => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      if (!ok) {
-        fallback.hidden = false;
-        fallback.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+      const cleanup = () => {
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.removeEventListener("blur", onBlur);
+        clearTimeout(timer);
+        link.classList.remove("is-launching");
+        link.removeAttribute("aria-busy");
+      };
+      const finish = ok => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (!ok) {
+          fallback.hidden = false;
+          fallback.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "nearest" });
+        }
+      };
+      const onBlur = () => finish(true);
+      const onVisibility = () => { if (document.hidden) finish(true); };
+      timer = setTimeout(() => finish(false), 4000);
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("blur", onBlur, { once: true });
+      active = { cancel: () => { settled = true; cleanup(); } };
+      try {
+        window.location.href = link.href;
+      } catch {
+        finish(false);
       }
-    };
-    const onBlur = () => finish(true);
-    const onVisibility = () => { if (document.hidden) finish(true); };
-    timer = setTimeout(() => finish(false), 4000);
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("blur", onBlur, { once: true });
-    active = { cancel: () => { settled = true; cleanup(); } };
-    try {
-      window.location.href = link.href;
-    } catch {
-      finish(false);
-    }
+    });
   });
 })();
 

@@ -6,6 +6,8 @@ import hashlib
 import json
 import logging
 import math
+import shutil
+import tempfile
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -17,6 +19,7 @@ import anyio
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from pydantic import BaseModel
 
@@ -24,6 +27,8 @@ from daftar import APP_NAME, __version__, hardware, llama_server
 from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
 from daftar.ingest import SUPPORTED, chunk_sections, clean_pdf_text, extract, page_image_png, scanned_pages, word_count
+from daftar.library import (LibraryError, backup_dir, create_archive, create_backup,
+                            list_backups, restore_archive)
 from daftar.ollama import LOOPBACK, Ollama, OllamaError, check_url, prefixes
 from daftar.openai_compat import OpenAICompat, detect_servers
 from daftar.rag import Retriever, fit_prompt
@@ -33,6 +38,7 @@ log = logging.getLogger("daftar")
 STATIC = Path(__file__).parent / "static"
 READ_WPM = 200
 MAX_UPLOAD_BYTES = 200 << 20  # per file
+MAX_LIBRARY_BYTES = 50 << 30  # whole library archive
 
 
 class RingLog(logging.Handler):
@@ -124,6 +130,10 @@ class AddToCollections(BaseModel):
 
 
 class PullIn(BaseModel):
+    name: str
+
+
+class BackupIn(BaseModel):
     name: str
 
 
@@ -221,6 +231,29 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
     def need(cond, code: int, msg: str):
         if not cond:
             raise HTTPException(code, msg)
+
+    def reset_ingest_worker():
+        """Stop indexing before the library is replaced, then start a worker for the restored data."""
+        nonlocal worker
+        worker.shutdown(wait=True, cancel_futures=True)
+        worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ingest")
+        app.state.worker = worker
+
+    def backup_folder() -> Path:
+        try:
+            return backup_dir(home, settings)
+        except OSError as exc:
+            raise HTTPException(400, f"The backup folder cannot be used: {exc}")
+
+    def backup_archive(name: str) -> Path:
+        folder = backup_folder()
+        if (not name or "/" in name or "\\" in name or not name.startswith("Daftar-")
+                or not name.endswith(".daftar")):
+            raise HTTPException(400, "Choose a Daftar backup.")
+        path = (folder / name).resolve()
+        if path.parent != folder.resolve() or not path.is_file():
+            raise HTTPException(404, "That backup was not found.")
+        return path
 
     # --- ingestion ------------------------------------------------------------
     progress = {}  # entry id -> "Reading scanned page 3 of 12" (shown while indexing)
@@ -515,6 +548,11 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
             if llama_state["server"]:
                 llama_state["server"].stop()
             llama_state.update(server=None, key=None)
+        if "backup_dir" in changes:
+            try:
+                backup_dir(home, {"backup_dir": changes["backup_dir"]})
+            except OSError as exc:
+                raise HTTPException(400, f"That backup folder cannot be used: {exc}")
         log.info("settings changed: %s", ", ".join(sorted(changes)))
         return settings.update(changes)
 
@@ -581,8 +619,87 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
     @app.get("/api/stats")
     def stats():
         s = store.stats()
-        s["db_size"] = sum(p.stat().st_size for p in home.glob("daftar.db*"))
+        s["db_size"] = sum(p.stat().st_size for p in home.glob("daftar.db*")
+                           if not p.name.endswith(".bak"))
         return s
+
+    # --- backup, export & import ----------------------------------------------------
+    @app.get("/api/backups")
+    def backups():
+        folder = backup_folder()
+        return {"folder": str(folder), "auto": bool(settings["backup_auto"]), "items": list_backups(folder)}
+
+    @app.post("/api/backups")
+    def back_up_now():
+        try:
+            item = create_backup(home, store, settings)
+        except LibraryError as exc:
+            raise HTTPException(400, str(exc))
+        except OSError as exc:
+            raise HTTPException(500, f"The backup could not be written: {exc}")
+        log.info("backup created: %s (%s bytes)", item["name"], item["size"])
+        return item
+
+    @app.get("/api/backups/download")
+    def download_backup(name: str):
+        return FileResponse(backup_archive(name), media_type="application/zip", filename=Path(name).name)
+
+    @app.post("/api/backups/restore")
+    def restore_backup(body: BackupIn):
+        archive = backup_archive(body.name)
+        reset_ingest_worker()
+        retriever.clear()
+        try:
+            result = restore_archive(home, archive, store, settings)
+        except LibraryError as exc:
+            raise HTTPException(400, str(exc))
+        finally:
+            retriever.clear()
+        log.info("library restored from %s; safety backup %s", body.name, result["safety_backup"])
+        return result
+
+    @app.get("/api/library/export")
+    def export_library():
+        handle = tempfile.NamedTemporaryFile(prefix="Daftar-", suffix=".daftar", delete=False)
+        handle.close()
+        dest = Path(handle.name)
+        try:
+            create_archive(home, store, dest)
+        except LibraryError as exc:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(400, str(exc))
+        except OSError as exc:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(500, f"The library could not be exported: {exc}")
+        filename = f"Daftar-{time.strftime('%Y%m%d-%H%M%S')}.daftar"
+        return FileResponse(dest, media_type="application/zip", filename=filename,
+                            background=BackgroundTask(dest.unlink, missing_ok=True))
+
+    @app.post("/api/library/import")
+    async def import_library(file: UploadFile):
+        name = Path(file.filename or "library.daftar").name
+        if not name.lower().endswith(".daftar"):
+            raise HTTPException(400, "Choose a .daftar library file.")
+        folder = Path(tempfile.mkdtemp(prefix="daftar-import-"))
+        temporary = folder / "library.daftar"
+        try:
+            size = 0
+            with temporary.open("wb") as output:
+                while chunk := await file.read(1 << 20):
+                    size += len(chunk)
+                    if size > MAX_LIBRARY_BYTES:
+                        raise HTTPException(413, "That library file is too large.")
+                    output.write(chunk)
+            await run_in_threadpool(reset_ingest_worker)
+            retriever.clear()
+            result = await run_in_threadpool(restore_archive, home, temporary, store, settings)
+            retriever.clear()
+            log.info("library imported from upload (%s bytes); safety backup %s", size, result["safety_backup"])
+            return result
+        except LibraryError as exc:
+            raise HTTPException(400, str(exc))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
     # --- collections ---------------------------------------------------------------
     def readiness(entries: list[dict]) -> dict:

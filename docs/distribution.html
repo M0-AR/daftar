@@ -94,7 +94,7 @@ FastAPI's <code>lifespan</code> (Starlette 1.x removed event handlers; FastAPI's
 <code>scripts/build.py</code> bundles <code>vendor/llama.cpp</code> when present as data, not binaries, so PyInstaller does not
 rewrite the engine (it keeps the executable bit when the source has it). A notarized macOS app must collect
 the engine as a binary under <code>Contents/Frameworks</code> in Phase 4; data-only directories are cross-linked there,
-so discovery works, but code in <code>Contents/Resources</code> breaks the signature. Verified: 114 offline + 3 live
+so discovery works, but code in <code>Contents/Resources</code> breaks the signature. Verified: 128 offline + 3 live
 tests, API-key auth end-to-end, think-off first token 0.05 s vs think-on 0.4 s.</p>
 <h2>2. Models: download on first run, sized to the machine, commercially licensed</h2>
 <ul>

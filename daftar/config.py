@@ -24,6 +24,8 @@ DEFAULTS = {
     "rerank": True,                 # "Improve answer relevance"
     "debug": False,
     "theme": "dark",
+    "backup_dir": "",              # empty: <data folder>/backups
+    "backup_auto": True,           # one backup a day while Daftar runs
 }
 
 LIMITS = {  # numeric settings: (min, max, type)
@@ -79,14 +81,19 @@ class Settings:
     def __getitem__(self, key):
         return self.values[key]
 
+    def _save(self) -> None:
+        temporary = self.path.with_name(f".{self.path.name}.tmp")
+        temporary.write_text(json.dumps(self.values, indent=2))
+        os.replace(temporary, self.path)
+
     def update(self, changes: dict) -> dict:
         self.values.update(clean(changes))
         if self.values["chunk_overlap"] >= self.values["chunk_size"]:
             self.values["chunk_overlap"] = self.values["chunk_size"] // 4
-        self.path.write_text(json.dumps(self.values, indent=2))
+        self._save()
         return self.values
 
     def reset(self) -> dict:
         self.values = dict(DEFAULTS)
-        self.path.write_text(json.dumps(self.values, indent=2))
+        self._save()
         return self.values

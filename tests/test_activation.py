@@ -17,6 +17,13 @@ def test_activation_url_detection():
     assert not activation.is_activation_url("")
 
 
+def test_browser_link_is_a_wake_up_signal_only():
+    for yes in ("daftar://open?browser=1", "DAFTAR://open?browser=true", "daftar://open?browser=yes"):
+        assert activation.browser_requested(yes)
+    for no in ("daftar://open", "daftar://open?browser=0", "https://example.com/?browser=1", ""):
+        assert not activation.browser_requested(no)
+
+
 def test_desktop_entry_quotes_the_executable():
     entry = activation._desktop_entry(["/opt/Daftar App/daftar", "--flag"])
     assert 'Exec="/opt/Daftar App/daftar" --flag %u' in entry

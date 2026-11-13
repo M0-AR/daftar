@@ -2,7 +2,7 @@
 
 Registration is per-user and best-effort: Windows uses HKEY_CURRENT_USER, Linux writes a desktop
 entry under XDG_DATA_HOME, and macOS relies on CFBundleURLTypes in the .app bundle. The URL is only
-a wake-up signal: its contents are never used as instructions or data.
+a wake-up signal: it may ask for a browser tab, but its contents are never used as instructions or data.
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from daftar.config import data_dir
 
@@ -27,6 +28,14 @@ log = logging.getLogger(__name__)
 
 def is_activation_url(value: str | None) -> bool:
     return bool(value) and value.lower().startswith(SCHEME + ":")
+
+
+def browser_requested(value: str | None) -> bool:
+    """Whether a daftar:// link asks for a browser tab instead of a native window."""
+    if not is_activation_url(value):
+        return False
+    query = parse_qs(urlsplit(value).query)
+    return query.get("browser", ["0"])[0].lower() in ("1", "true", "yes", "on")
 
 
 def _quote_desktop(arg: str) -> str:

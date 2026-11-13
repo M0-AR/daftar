@@ -5,9 +5,11 @@ entries    a document's membership in a collection, with that collection's own i
 chunks     passages of one entry (+ FTS5 keyword index, + normalized float32 embedding)
 """
 import json
+import logging
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -52,18 +54,47 @@ CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON chunks BEGIN
   DELETE FROM chunks_fts WHERE rowid = old.id; END;
 """
 SCHEMA_VERSION = 3
+log = logging.getLogger(__name__)
 
 
 class Store:
     def __init__(self, path):
+        self.path = Path(path)
         self.db = sqlite3.connect(str(path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.lock = threading.RLock()
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.create_function("daftar_index", 1, index_text, deterministic=True)
+        version = self.db.execute("PRAGMA user_version").fetchone()[0]
+        if 1 <= version < SCHEMA_VERSION:
+            self._backup_before_migration(version)
         self.db.executescript(SCHEMA)
         self._migrate()
+
+    def _backup_before_migration(self, version: int) -> None:
+        """Keep the pre-upgrade database next to the live one in case a migration goes wrong."""
+        dest = self.path.with_name(f"{self.path.name}.v{version}.bak")
+        try:
+            dest.unlink(missing_ok=True)
+            target = sqlite3.connect(str(dest))
+            try:
+                self.db.backup(target)
+            finally:
+                target.close()
+        except (OSError, sqlite3.Error) as exc:
+            log.warning("Could not save a pre-migration backup: %s", exc)
+
+    def schema_version(self) -> int:
+        return self.db.execute("PRAGMA user_version").fetchone()[0]
+
+    def close(self):
+        with self.lock:
+            try:
+                self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
+            self.db.close()
 
     def _migrate(self):
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
@@ -214,4 +245,6 @@ class Store:
         return self.one("""SELECT (SELECT COUNT(*) FROM collections) AS collections,
                                   (SELECT COUNT(*) FROM documents) AS documents,
                                   (SELECT COUNT(*) FROM chunks) AS chunks,
+                                  (SELECT COUNT(*) FROM chats) AS chats,
+                                  (SELECT COUNT(*) FROM messages) AS messages,
                                   (SELECT COALESCE(SUM(size), 0) FROM documents) AS size""")

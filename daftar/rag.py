@@ -49,6 +49,10 @@ class Retriever:
             self._cache[key] = (signature, index, mat)
         return index, mat
 
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
+
     def warm(self, collection_id, embed_model: str) -> int:
         index, _ = self._matrix(collection_id, embed_model)
         return len(index)
