@@ -6,8 +6,11 @@ when Daftar exits. It speaks the same OpenAI-compatible API as the other engines
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -65,7 +68,7 @@ def find_binaries(configured: str = "", roots: list[Path] | None = None) -> list
 
 
 def find_models(configured: str = "", roots: list[Path] | None = None) -> list[Path]:
-    """Chat model files (.gguf), best guess first. Projector files (mmproj) are not chat models."""
+    """Chat model files (.gguf), best guess first. Projector and embedding files are not chat models."""
     chosen: list[Path] = []
     found: list[Path] = []
     seen: set[Path] = set()
@@ -77,7 +80,8 @@ def find_models(configured: str = "", roots: list[Path] | None = None) -> list[P
             return
         if path in seen or not path.is_file() or path.suffix.lower() != ".gguf":
             return
-        if "mmproj" in path.name.lower():
+        name = path.name.lower()
+        if "mmproj" in name or "embed" in name:
             return
         seen.add(path)
         (chosen if explicit else found).append(path)
@@ -99,8 +103,6 @@ def find_models(configured: str = "", roots: list[Path] | None = None) -> list[P
             value += 20
         if any(k in name for k in ("-vl", "vl-", "vision", "llava", "minicpm-v", "internvl", "smolvlm", "ocr")):
             value -= 50
-        if "embed" in name:
-            value -= 200
         try:
             size = path.stat().st_size
         except OSError:
@@ -119,13 +121,19 @@ def free_port() -> int:
 def _library_path(binary: Path) -> dict[str, str]:
     """llama.cpp's tarballs ship their shared libraries next to the program, but a stale copy in the
     system loader cache can win (measured: an old /opt/llama build crashed a b12360 server). Point the
-    loader at the program's own folder first."""
+    loader at the program's own folder first. In a frozen PyInstaller app, start from the original
+    search path (LD_LIBRARY_PATH_ORIG), not the bundle's, so bundled Python libraries cannot leak in."""
     env = os.environ.copy()
     parent = str(binary.parent)
     if os.name == "nt":
-        env["PATH"] = parent + os.pathsep + env.get("PATH", "")
+        meipass = getattr(sys, "_MEIPASS", "")
+        path = env.get("PATH", "")
+        if meipass:
+            path = os.pathsep.join(p for p in path.split(os.pathsep) if p and not p.startswith(meipass))
+        env["PATH"] = parent + (os.pathsep + path if path else "")
     else:
-        env["LD_LIBRARY_PATH"] = parent + (os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+        base = env.get("LD_LIBRARY_PATH_ORIG", env.get("LD_LIBRARY_PATH", ""))
+        env["LD_LIBRARY_PATH"] = parent + (os.pathsep + base if base else "")
         if sys.platform == "darwin":
             env["DYLD_LIBRARY_PATH"] = parent + (os.pathsep + env["DYLD_LIBRARY_PATH"] if env.get("DYLD_LIBRARY_PATH") else "")
     return env
@@ -136,6 +144,54 @@ def command(binary: Path, model: Path, port: int, ctx: int = CTX) -> list[str]:
             "-ngl", "99", "-c", str(ctx), "--parallel", "1", "--no-webui", "--alias", model.stem]
 
 
+def _alive(pid: int) -> bool:
+    if os.name == "nt":  # os.kill(pid, 0) would terminate the process on Windows
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            code = ctypes.c_ulong()
+            ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+            kernel32.CloseHandle(handle)
+            return bool(ok) and code.value == 259  # STILL_ACTIVE
+        except (AttributeError, OSError):
+            return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _cmdline(pid: int) -> str:
+    """Best-effort command line, used to confirm a pid still belongs to one of our llama-servers."""
+    try:
+        if sys.platform.startswith("linux"):
+            return Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        if sys.platform == "darwin":
+            out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True,
+                                 text=True, timeout=2)
+            return out.stdout.strip()
+        if os.name == "nt":
+            # wmic is gone from recent Windows; CIM through PowerShell is the supported reader. If this
+            # fails (policy, missing PowerShell), the caller treats the process as "not ours" and never kills it.
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            out = subprocess.run(
+                ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
+                capture_output=True, text=True, timeout=5, creationflags=flags)
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ""
+
+
 class LlamaServer:
     """Owns one llama-server process. Restarts it if it died between questions."""
 
@@ -144,11 +200,15 @@ class LlamaServer:
         self.model = Path(model)
         self.alias = self.model.stem
         self.ctx = ctx
-        self.log_path = Path(home) / "llama-server.log"
+        self.home = Path(home)
+        self.log_path = self.home / "llama-server.log"
+        self.pid_path = self.home / "llama-server.pid"
+        self.api_key = secrets.token_urlsafe(32)
         self._proc: subprocess.Popen | None = None
         self._url: str | None = None
         self._log = None
         self._lock = threading.Lock()
+        self._stale_checked = False
 
     def healthy(self) -> bool:
         if not self._url:
@@ -162,6 +222,9 @@ class LlamaServer:
         with self._lock:
             if self._proc and self._proc.poll() is None and self.healthy():
                 return self._url
+            if not self._stale_checked:
+                self._kill_stale()
+                self._stale_checked = True
             self._stop_locked()
             errors = []
             for binary in self.binaries:
@@ -176,17 +239,88 @@ class LlamaServer:
             raise OllamaError("The built-in engine could not start. " + " · ".join(errors[-2:])
                               + f" Details: {self.log_path}")
 
+    def _kill_stale(self):
+        """Stop a llama-server left behind by an earlier crash. Only a process whose command line still
+        names this exact model is touched; a live parent process means another Daftar instance owns it."""
+        try:
+            data = json.loads(self.pid_path.read_text())
+        except (OSError, ValueError):
+            return
+        pid = data.get("pid")
+        parent = data.get("parent")
+        if not isinstance(pid, int) or pid <= 0:
+            self.pid_path.unlink(missing_ok=True)
+            return
+        if isinstance(parent, int) and parent != os.getpid() and _alive(parent):
+            log.info("built-in engine pid file belongs to another running Daftar instance; leaving it alone")
+            return
+        cmdline = _cmdline(pid)
+        if not cmdline or "llama-server" not in cmdline or str(self.model) not in cmdline:
+            self.pid_path.unlink(missing_ok=True)
+            return
+        if _alive(pid):
+            log.warning("stopping an orphaned built-in engine (pid %s)", pid)
+            try:
+                os.kill(pid, signal.SIGTERM)
+                for _ in range(20):
+                    if not _alive(pid):
+                        break
+                    time.sleep(0.25)
+                else:
+                    os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            except OSError as e:
+                log.warning("could not stop orphaned built-in engine %s: %s", pid, e)
+        self.pid_path.unlink(missing_ok=True)
+
+    def _write_pid(self, cmd: list[str]):
+        try:
+            self.pid_path.parent.mkdir(parents=True, exist_ok=True)
+            self.pid_path.write_text(json.dumps({"pid": self._proc.pid, "parent": os.getpid(), "cmd": cmd}))
+        except OSError as e:
+            log.warning("could not record built-in engine pid: %s", e)
+
+    def _clear_pid(self):
+        try:
+            data = json.loads(self.pid_path.read_text())
+        except (OSError, ValueError):
+            return
+        if data.get("parent") != os.getpid():
+            return  # another Daftar instance owns this file; never delete its record
+        if not self._proc or data.get("pid") == self._proc.pid:
+            self.pid_path.unlink(missing_ok=True)
+
+    def _rotate_log(self):
+        try:
+            if self.log_path.stat().st_size > 5_000_000:
+                backup = self.log_path.with_suffix(".log.1")
+                backup.unlink(missing_ok=True)
+                self.log_path.replace(backup)
+        except OSError:
+            pass
+
     def _start(self, binary: Path):
         port = free_port()
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._rotate_log()
         self._log = open(self.log_path, "ab")
         cmd = command(binary, self.model, port, self.ctx)
         self._log.write(f"\n=== {time.ctime()} {' '.join(cmd)}\n".encode())
         self._log.flush()
+        env = _library_path(binary)
+        env["LLAMA_API_KEY"] = self.api_key  # /health stays public; model and chat routes need this key
+        if os.name == "nt":
+            # PyInstaller points the DLL search at its bundle for child processes too (its docs
+            # recommend undoing this before launching an external program).
+            try:
+                import ctypes
+                ctypes.windll.kernel32.SetDllDirectoryW(None)
+            except (AttributeError, OSError):
+                pass
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        self._proc = subprocess.Popen(cmd, env=_library_path(binary), stdin=subprocess.DEVNULL,
+        self._proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL,
                                       stdout=self._log, stderr=subprocess.STDOUT, creationflags=flags)
         self._url = f"http://127.0.0.1:{port}"
+        self._write_pid(cmd)
         deadline = time.monotonic() + START_TIMEOUT
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
@@ -207,6 +341,7 @@ class LlamaServer:
             except subprocess.TimeoutExpired:
                 self._proc.kill()
                 self._proc.wait(timeout=5)
+        self._clear_pid()
         self._proc = None
         self._url = None
         if self._log:
@@ -260,7 +395,7 @@ class LlamaClient:
 
     def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192,
              think: bool = False):
-        inner = OpenAICompat(self.server.ensure(), allow_remote=False)
+        inner = OpenAICompat(self.server.ensure(), allow_remote=False, api_key=self.server.api_key)
         # Per-request template kwargs avoid a restart when "Let the model reason first" is toggled.
         yield from inner.chat(self.server.alias, messages, temperature, num_ctx, think,
                               extra={"chat_template_kwargs": {"enable_thinking": bool(think)}})

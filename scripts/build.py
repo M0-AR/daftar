@@ -8,7 +8,8 @@ from pathlib import Path
 import PyInstaller.__main__
 
 root = Path(__file__).resolve().parents[1]
-PyInstaller.__main__.run([
+vendor = root / "vendor" / "llama.cpp"
+args = [
     str(root / "daftar" / "__main__.py"),
     "--name", "Daftar",
     "--windowed",
@@ -20,4 +21,11 @@ PyInstaller.__main__.run([
     "--distpath", str(root / "dist"),
     "--workpath", str(root / "build"),
     "--specpath", str(root / "build"),
-])
+]
+if vendor.is_dir():
+    # Copied as data, not binaries: the launcher points the loader at this folder, so PyInstaller must
+    # not rewrite or re-collect the engine. It keeps the executable bit when the source has it.
+    args += ["--add-data", f"{vendor}{os.pathsep}vendor/llama.cpp"]
+else:
+    print(f"Note: {vendor} does not exist; this build will not include the built-in engine.")
+PyInstaller.__main__.run(args)

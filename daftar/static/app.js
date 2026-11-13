@@ -639,9 +639,9 @@ async function renderSettings() {
           <span class="hint">LM Studio :1234, Jan :1337, llama.cpp :8080, vLLM :8000, KoboldCpp :5001. The context window is set in that app.</span></div>
         <div class="field"><label>API key <span class="hint">(only if your server requires one)</span></label><input type="text" data-setting="openai_key" value="${esc(cfg.openai_key)}" autocomplete="off"></div>`
         : `<div class="field"><label>Ollama server address</label><input type="text" data-setting="ollama_url" value="${esc(cfg.ollama_url)}"></div>`}
-        <div class="row" style="margin-bottom:12px"><button class="btn small" data-act="detect">Find AI apps running on this computer</button></div>
+        ${cfg.engine === "llama" ? "" : `<div class="row" style="margin-bottom:12px"><button class="btn small" data-act="detect">Find AI apps running on this computer</button></div>
         <div id="detected"></div>
-        ${cfg.engine === "llama" ? "" : sw("allow_remote_ollama", "Allow a server on another computer", "Only for a server you control. Your documents and questions will be sent to it.")}
+        ${sw("allow_remote_ollama", "Allow a server on another computer", "Only for a server you control. Your documents and questions will be sent to it.")}`}
       </div>
       <div class="panel"><h2>Appearance &amp; advanced</h2>
         <label class="switch"><input type="checkbox" id="darkMode" ${cfg.theme !== "light" ? "checked" : ""}><span><b>Dark mode</b></span></label>
@@ -726,13 +726,13 @@ async function renderHelp() {
         <li>Raise <b>Passages to use</b> for broad questions; lower <b>Creativity</b> for precise facts.</li>
         <li>After changing block size or the search model, use <b>Collections → Check status → Optimize search</b>.</li></ul></div>
       <div class="panel"><h2>Troubleshooting</h2><ul>
-        <li><b>“Ollama not running”</b>: start Ollama, then reopen Daftar.</li>
+        <li><b>“Ollama not running”</b>: start Ollama, then reopen Daftar. If you chose the built-in engine, check its program and model file under Settings → AI engine.</li>
         <li><b>“CPU only”</b>: Ollama found no GPU libraries. Reinstall Ollama from its official package (it includes the NVIDIA/AMD runtimes), restart it, and check that <code>ollama ps</code> shows “100% GPU”.</li>
         <li><b>Prefer LM Studio, Jan, llama.cpp or vLLM?</b> Start its local server, then Settings → AI engine → “Find AI apps running on this computer” → Use.</li>
         <li><b>Scanned PDFs and photos</b>: install a vision model for reading text, e.g. PaddleOCR-VL, and pick it under Settings → Reading scanned pages.</li>
 
         <li><b>Model not installed</b>: download it in Settings, or run <code>ollama pull &lt;name&gt;</code>.</li></ul></div>
-      <div class="panel"><h2>Privacy</h2><p class="sub" style="margin:0">Daftar runs a small server on 127.0.0.1 that only this computer can reach, and talks only to your Ollama. Nothing is uploaded, tracked or synced.</p></div>
+      <div class="panel"><h2>Privacy</h2><p class="sub" style="margin:0">Daftar runs a small server on 127.0.0.1 that only this computer can reach. It uses the AI engine you chose — Ollama, its own built-in llama.cpp, or your local AI app — and nothing is uploaded, tracked or synced unless you explicitly allow a server on another computer.</p></div>
     </div></div></div>`;
 }
 

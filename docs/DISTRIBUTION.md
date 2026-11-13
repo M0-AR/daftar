@@ -44,6 +44,18 @@ its own directory to `LD_LIBRARY_PATH` (macOS `DYLD_LIBRARY_PATH`, Windows `PATH
 implemented but untested. Embeddings/OCR for this engine are not wired yet (keyword-only search; scans are
 reported unreadable), and the nightly build is not pinned for distribution yet.
 
+**Hardened 2026-11-13 after a full re-audit.** The child now gets a random API key (`LLAMA_API_KEY`; the
+client sends it, `/health` stays public: measured 401 without it). A pid file stops orphans after a crash on
+Linux/macOS (the command line must still name the model; a live parent means another Daftar owns it) and via
+PowerShell CIM on Windows; any lookup failure means "never kill". Logs rotate at 5 MB. Shutdown moved to
+FastAPI's `lifespan` (Starlette 1.x removed event handlers; FastAPI's shim is legacy), the UI is served
+`Cache-Control: no-store`, and embedding-only `.gguf` files are no longer offered as chat models.
+`scripts/build.py` bundles `vendor/llama.cpp` when present as data, not binaries, so PyInstaller does not
+rewrite the engine (it keeps the executable bit when the source has it). A notarized macOS app must collect
+the engine as a binary under `Contents/Frameworks` in Phase 4; data-only directories are cross-linked there,
+so discovery works, but code in `Contents/Resources` breaks the signature. Verified: 107 offline + 3 live
+tests, API-key auth end-to-end, think-off first token 0.05 s vs think-on 0.4 s.
+
 ## 2. Models: download on first run, sized to the machine, commercially licensed
 
 - **Licences for a paid product.** Qwen3 / Qwen3.5 / Qwen3-Embedding and PaddleOCR-VL are Apache 2.0; Gemma 4 is

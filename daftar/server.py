@@ -8,6 +8,7 @@ import logging
 import math
 import time
 import uuid
+from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -75,6 +76,16 @@ class LocalOnly:
         await self.app(scope, receive, send)
 
 
+class NoCacheStatic(StaticFiles):
+    """The UI ships inside the app, so a stale app.js after an update is a real failure. Revalidate
+    everything: no bandwidth cost on loopback."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 def bare(name: str | None) -> str | None:
     """Model name without Ollama's implicit ':latest' tag (how index entries record it)."""
     return name[:-7] if name and name.endswith(":latest") else name
@@ -129,7 +140,13 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         log.removeHandler(old)
     log.addHandler(ring)
     log.setLevel(logging.DEBUG)
-    app = FastAPI(title=APP_NAME, version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_app):
+        yield
+        stop_llama()
+
+    app = FastAPI(title=APP_NAME, version=__version__, docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=lifespan)
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
 
     def ollama():
@@ -149,13 +166,16 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         for label, value in (("program", explicit_binary), ("model file", explicit_model)):
             if value and not Path(value).expanduser().is_file():
                 raise OllamaError(f"The chosen llama.cpp {label} was not found: {value}")
+        if explicit_model and "embed" in Path(explicit_model).name.lower():
+            raise OllamaError("That is an embedding model, not a chat model. Choose a chat .gguf in "
+                              "Settings → AI engine.")
         binaries = llama_server.find_binaries(explicit_binary)
         models = llama_server.find_models(explicit_model)
         if not binaries:
             raise OllamaError("No llama.cpp program was found. Put llama-server in ~/models/llama.cpp, "
                               "or choose it in Settings → AI engine.")
         if not models:
-            raise OllamaError("No .gguf model file was found. Download one, or choose it in Settings → AI engine.")
+            raise OllamaError("No chat .gguf model file was found. Choose one in Settings → AI engine.")
         key = (str(binaries[0]), str(models[0]))
         if llama_state["key"] != key:
             if llama_state["server"]:
@@ -168,8 +188,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         if llama_state["server"]:
             llama_state["server"].stop()
 
-    app.router.on_shutdown.append(stop_llama)
-    atexit.register(stop_llama)
+    atexit.register(stop_llama)  # safety net for a window closed without a clean ASGI shutdown
 
     def file_path(doc: dict) -> Path:
         return files_dir / f"{doc['id']}{doc['ext']}"
@@ -539,9 +558,16 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         short = lambda path: "~" + str(path)[len(root):] if str(path).startswith(root) else str(path)
         binaries = llama_server.find_binaries(settings["llama_binary"])
         models = llama_server.find_models(settings["llama_model"])
+
+        def size_label(path: Path) -> str:
+            try:
+                return f"{path.stem} · {path.stat().st_size / 1e9:.1f} GB"
+            except OSError:
+                return path.stem
+
         return {
             "binaries": [{"path": str(p), "label": short(p)} for p in binaries],
-            "models": [{"path": str(p), "label": f"{p.stem} · {p.stat().st_size / 1e9:.1f} GB"} for p in models],
+            "models": [{"path": str(p), "label": size_label(p)} for p in models],
             "auto_binary": str(binaries[0]) if binaries else "",
             "auto_model": str(models[0]) if models else "",
             "running": bool(llama_state["server"] and llama_state["server"].running()),
@@ -892,7 +918,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
                 models = installed_models(client)
                 model = resolve_chat_model(models, client)
                 if not model:
-                    raise RuntimeError("No chat model is installed in Ollama. Open Settings to add one.")
+                    raise RuntimeError("No chat model is available. Open Settings → AI engine to choose one.")
                 vec, emb = query_vector(client, models, question)
                 timings["embed_ms"] = round((time.perf_counter() - t0) * 1000)
                 t1 = time.perf_counter()
@@ -951,5 +977,5 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
 
         return StreamingResponse(body(), media_type="application/x-ndjson")
 
-    app.mount("/", StaticFiles(directory=STATIC, html=True), name="ui")
+    app.mount("/", NoCacheStatic(directory=STATIC, html=True), name="ui")
     return app

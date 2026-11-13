@@ -7,9 +7,11 @@ accepts a local write, and rejects a request from a foreign web page.
 """
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -43,7 +45,7 @@ def main() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
-    home = ROOT / "build" / "smoke-home"
+    home = Path(tempfile.mkdtemp(prefix="daftar-smoke-home-"))  # fresh: a rerun must not hit old data
     env = {**os.environ, "DAFTAR_HOME": str(home)}
     server = subprocess.Popen([str(exe), "--headless", "--port", str(port)], env=env,
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -75,6 +77,7 @@ def main() -> int:
             server.wait(10)
         except subprocess.TimeoutExpired:
             server.kill()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":

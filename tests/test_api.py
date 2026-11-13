@@ -716,3 +716,25 @@ def test_llama_file_endpoint_lists_programs_and_models(api):
     assert all({"path", "label"} <= set(b) for b in data["binaries"])
     assert all({"path", "label"} <= set(m) for m in data["models"])
     assert data["running"] is False
+
+
+def test_builtin_engine_refuses_an_embedding_file_as_chat_model(api, tmp_path):
+    program = tmp_path / "llama-server"
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o755)
+    embed = tmp_path / "Qwen3-Embedding-0.6B-Q8_0.gguf"
+    embed.write_bytes(b"x")
+
+    api.c.put("/api/settings", json={"engine": "llama", "llama_binary": str(program),
+                                     "llama_model": str(embed)})
+    status = api.c.get("/api/status").json()
+
+    assert status["ollama"] is False
+    assert "embedding model" in status["error"]
+
+
+def test_ui_is_served_without_cache(api):
+    for path in ("/", "/app.js", "/app.css"):
+        response = api.c.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"

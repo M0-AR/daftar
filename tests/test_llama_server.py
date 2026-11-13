@@ -1,3 +1,7 @@
+import json
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -18,6 +22,14 @@ def test_models_skip_projectors_and_prefer_qwen(tmp_path):
 
     assert found[0] == qwen.resolve()
     assert all("mmproj" not in p.name for p in found)
+
+
+def test_models_never_offer_an_embedding_file_as_chat(tmp_path):
+    (tmp_path / "Qwen3-Embedding-0.6B-Q8_0.gguf").write_bytes(b"x" * 100)
+    chat = tmp_path / "Qwen3.5-2B-Q4_K_M.gguf"
+    chat.write_bytes(b"x" * 10)
+
+    assert ls.find_models(roots=[tmp_path]) == [chat.resolve()]
 
 
 def test_binaries_try_gpu_builds_before_cpu(tmp_path):
@@ -53,6 +65,42 @@ def test_command_stays_private_and_single_slot(tmp_path):
     assert cmd[cmd.index("--host") + 1] == "127.0.0.1"
     assert cmd[cmd.index("--parallel") + 1] == "1"
     assert cmd[-2:] == ["--alias", "Qwen3.5-2B-Q4_K_M"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX loader variable")
+def test_loader_path_prefers_the_program_folder(tmp_path, monkeypatch):
+    monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/stale/libs")
+
+    env = ls._library_path(tmp_path / "llama-server")
+
+    assert env["LD_LIBRARY_PATH"].split(os.pathsep)[0] == str(tmp_path)
+    assert "/stale/libs" in env["LD_LIBRARY_PATH"]
+
+
+def test_stale_pid_file_is_removed_when_its_process_is_gone(tmp_path):
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()
+    pid_file = tmp_path / "llama-server.pid"
+    pid_file.write_text(json.dumps({"pid": dead.pid, "parent": os.getpid()}))
+    server = ls.LlamaServer([Path("/no/llama-server")], tmp_path / "m.gguf", tmp_path)
+
+    server._kill_stale()
+
+    assert not pid_file.exists()
+
+
+def test_stale_pid_file_of_a_running_instance_is_left_alone(tmp_path):
+    if os.getppid() == 0:
+        pytest.skip("no parent process to act as the other Daftar instance")
+    pid_file = tmp_path / "llama-server.pid"
+    pid_file.write_text(json.dumps({"pid": 1, "parent": os.getppid()}))
+    server = ls.LlamaServer([Path("/no/llama-server")], tmp_path / "m.gguf", tmp_path)
+
+    server._kill_stale()
+    server._clear_pid()
+
+    assert pid_file.exists()
 
 
 def test_metadata_needs_no_running_server(tmp_path):
