@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daftar — private document chat on your own computer</title>
+<meta name="description" content="Daftar is a local-first document assistant. Ask your contracts, reports and notes in plain language and get answers with the exact passage cited. No accounts, no telemetry, no uploads.">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="Daftar — your documents. Your computer. Real answers.">
+<meta property="og:description" content="Private document chat with citations and match scores. Runs locally. Open source, MIT.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="assets/social.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='10' y='6' width='44' height='52' rx='7' fill='%2314b8a6'/%3E%3Cpath d='M25 20h21M25 28h21M25 36h14' stroke='%23ecfdf5' stroke-width='3.2' stroke-linecap='round'/%3E%3Cpath d='M40 6h9v19l-4.5-3.6L40 25z' fill='%23fbbf24'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+<script>document.documentElement.classList.add("js");</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="#top" aria-label="Daftar home">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0f766e"/></linearGradient></defs><rect x="10" y="6" width="44" height="52" rx="7" fill="url(#lg1)"/><rect x="10" y="6" width="9" height="52" rx="4" fill="#0b4f4a" opacity=".55"/><path d="M25 20h21M25 28h21M25 36h14" stroke="#ecfdf5" stroke-width="3.2" stroke-linecap="round"/><path d="M40 6h9v19l-4.5-3.6L40 25z" fill="#fbbf24"/></svg>
+      <span>Daftar<small>private document chat</small></span>
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#demo">Demo</a>
+      <a href="#how">How it works</a>
+      <a href="#lab">Knowledge Lab</a>
+      <a href="#quiz" class="opt">Quiz</a>
+      <a href="#value" class="opt">Value</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn primary small nav-cta" href="#start">Get started</a>
+    </nav>
+    <button class="menu-btn" id="menuBtn" aria-expanded="false" aria-controls="mobileMenu" aria-label="Open menu">☰</button>
+  </div>
+</header>
+<div class="mobile" id="mobileMenu">
+  <a href="#demo">Demo</a>
+  <a href="#how">How it works</a>
+  <a href="#lab">Knowledge Lab</a>
+  <a href="#quiz">Quiz</a>
+  <a href="#value">Value</a>
+  <a href="#benchmarks">Benchmarks</a>
+  <a href="#faq">FAQ</a>
+  <a href="#start">Get started</a>
+</div>
+
+<main id="main">
+<section class="hero" id="top">
+  <canvas id="heroCanvas" aria-hidden="true"></canvas>
+  <div class="container hero-grid">
+    <div class="hero-copy">
+      <span class="badge"><span class="pulse"></span> Local-first · open source · MIT</span>
+      <h1>Your documents.<br>Your computer.<br><span class="grad">Real answers.</span></h1>
+      <p class="lead">Daftar is a private document assistant for contracts, reports, research and notes. Ask in plain language. Get an answer that cites the exact passage — with a match score you can check. Nothing leaves your machine.</p>
+      <div class="hero-cta">
+        <a class="btn primary" href="#demo">Try the live demo
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <a class="btn" href="#start">Get started in 3 commands</a>
+      </div>
+      <div class="trust">
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/></svg>No accounts</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 12a8 8 0 1116 0v5a3 3 0 01-3 3h-1"/><circle cx="12" cy="12" r="3"/></svg>No telemetry</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12l4 4L19 6"/></svg>Works offline</span>
+        <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>Windows · macOS · Linux</span>
+      </div>
+    </div>
+    <div class="hero-card">
+      <div class="window">
+        <div class="win-bar">
+          <span class="win-dots"><i></i><i></i><i></i></span>
+          <span class="win-title">Daftar — Supplier contracts</span>
+          <span class="win-live"><i></i>on device</span>
+        </div>
+        <div class="win-body">
+          <div class="q-bubble">When does the supplier agreement renew, and how much notice is needed?</div>
+          <div class="a-row">
+            <span class="avatar">D</span>
+            <div>
+              <div class="a-text">The initial term ends on 28 February 2027. After that it renews automatically for successive 12-month terms unless either party gives written notice at least 60 days before the term ends <a class="cite" href="#demo" aria-label="See the source in the demo">1</a>.</div>
+              <div class="mini-source">
+                <div class="row"><b>Northwind Supplier Agreement</b><span class="match">94% match</span></div>
+                <span>§2 Term and renewal · 3 documents searched</span>
+              </div>
+              <div class="mini-foot"><span>Answered locally · 0.3 s</span><span>1 citation</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="container">
+    <div class="metrics reveal">
+      <div class="metric"><b>25/27</b><span>answers correct on the evaluation set</span></div>
+      <div class="metric"><b>26/27</b><span>answers carried a citation</span></div>
+      <div class="metric"><b><em>0/8</em></b><span>strong prompt injections succeeded</span></div>
+      <div class="metric"><b>0 bytes</b><span>of your documents uploaded</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="demo">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Interactive demo</div>
+      <h2>Ask three documents. Watch it show its work.</h2>
+      <p>This miniature runs entirely in your browser over a supplier agreement, a quarterly review and an invoice. Type a question or pick one below. Every answer points to the passage it came from, with a relevance score.</p>
+    </div>
+    <div class="demo-wrap reveal">
+      <div class="chat-card">
+        <div class="chat-head">
+          <span class="avatar">D</span>
+          <div><b>Ask the sample library</b><span>3 documents · 11 passages · runs on this page</span></div>
+          <span class="local">Local</span>
+        </div>
+        <div class="chat-log" id="chatLog" aria-live="polite" aria-label="Demo conversation"></div>
+        <div class="suggest" id="suggestions"></div>
+        <form class="chat-form" id="chatForm">
+          <label class="sr-only" for="chatInput">Ask a question about the sample documents</label>
+          <input id="chatInput" type="text" autocomplete="off" placeholder="Ask about renewal, delivery, the invoice total…">
+          <button class="btn primary" type="submit" id="sendBtn">Ask</button>
+        </form>
+        <p class="chat-note">Miniature demo: it retrieves and extracts sentences in your browser. The desktop app adds embeddings, reranking and a local language model that writes the full answer. No network requests.</p>
+      </div>
+      <aside class="side-stack">
+        <div class="side-card">
+          <h4>Sample library</h4>
+          <div class="doc-item"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8z"/><path d="M14 3v5h5"/></svg></span><div><b>Northwind Supplier Agreement</b><span>Contract · 6 sections · 4.1k chars</span></div></div>
+          <div class="doc-item"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="M8 15l4-5 3 3 4-6"/></svg></span><div><b>Q3 Operations Review</b><span>Report · internal · 2.6k chars</span></div></div>
+          <div class="doc-item"><span class="ico"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span><div><b>Invoice 2026-114</b><span>Invoice · PDF · includes Arabic note</span></div></div>
+        </div>
+        <div class="side-card">
+          <h4>What is real here</h4>
+          <ul>
+            <li>Real keyword scoring over real passages, in your browser.</li>
+            <li>Real citations and a real relevance score.</li>
+            <li>Real Arabic text handling in the invoice.</li>
+          </ul>
+          <div class="honest">The final answer in the desktop app is written by a local model. Here it is extracted from the best passage, so you can see the retrieval step honestly.</div>
+        </div>
+        <div class="side-card">
+          <h4>Sources</h4>
+          <div class="sources" id="demoSources"><p style="color:var(--faint);font-size:.75rem;margin:0">Ask a question to see the passages behind the answer.</p></div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="how">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">How it works</div>
+      <h2>The model does not remember your documents. It reads them.</h2>
+      <p>That single design choice is why Daftar can be small, private and honest. Your question is matched to passages first; the model only writes from what was found. If the answer is not in your documents, the citations show it.</p>
+    </div>
+    <div class="pipeline reveal">
+      <div class="step"><div class="num">1</div><h3>Add</h3><p>Drop in PDFs, DOCX, Markdown, text, HTML, CSV or scans. Organise them into collections — one per client, project or case.</p><span class="tag">your files stay yours</span></div>
+      <div class="step"><div class="num">2</div><h3>Extract</h3><p>Text is pulled page by page. Scans go through OCR. Headings and tables are kept where possible, so a citation can name the section.</p><span class="tag">including Arabic</span></div>
+      <div class="step"><div class="num">3</div><h3>Split</h3><p>Long documents become short passages with section context. Small passages make precise citations possible.</p><span class="tag">section-aware</span></div>
+      <div class="step"><div class="num">4</div><h3>Index</h3><p>Two indexes live in a local SQLite file: meaning (embeddings) and exact words (keywords). Names, codes and dates are never lost in a vector.</p><span class="tag">hybrid search</span></div>
+      <div class="step"><div class="num">5</div><h3>Retrieve</h3><p>Your question fetches the closest passages. Weak and duplicate matches are dropped before the model sees anything.</p><span class="tag">recall first</span></div>
+      <div class="step"><div class="num">6</div><h3>Answer</h3><p>The local model writes from those passages only. The answer carries numbered citations and a match score, so you can verify every claim.</p><span class="tag">auditable by design</span></div>
+    </div>
+    <div class="callout reveal">
+      <span class="big" aria-hidden="true">↳</span>
+      <p><b>Why this matters:</b> a cloud chatbot asked about a private contract has to send the contract to someone else's computer. Daftar sends nothing. It finds the relevant pages on your disk and asks a model on your disk to read them. The citation is not decoration — it is the audit trail.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="lab">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">3D Knowledge Lab</div>
+      <h2>Build a retrieval brain, one concept at a time.</h2>
+      <p>Ten steps turn a pile of documents into an assistant that can answer with evidence. Read the definition, then click the matching node in 3D. Complete the network to hear what you built.</p>
+    </div>
+    <div class="lab-wrap reveal">
+      <div class="lab-stage">
+        <div class="lab-top">
+          <span class="badge">Step <b id="labStep">1</b> / 10</span>
+          <span class="badge" id="labScoreBadge">Score <b id="labScore">0</b></span>
+        </div>
+        <canvas id="labCanvas" role="img" aria-label="A three-dimensional network of ten concept nodes. Use the concept buttons below the canvas to play with a keyboard or screen reader."></canvas>
+        <span class="lab-hint">Drag to rotate · click the node that matches the definition</span>
+      </div>
+      <div class="lab-panel">
+        <div class="q" id="labQuestion">Which concept comes first?</div>
+        <h3 id="labTitle">Read the definition, then click the node</h3>
+        <p class="desc" id="labDesc">Every step is a real part of the pipeline. The network grows as you get them right.</p>
+        <div class="lab-progress" aria-hidden="true"><i id="labBar"></i></div>
+        <div class="lab-meta"><span>Network <b id="labBuilt">0</b> / 10</span><span id="labStreak">Streak 0</span></div>
+        <div class="lab-feedback" id="labFeedback" aria-live="polite">Pick the concept that matches the definition.</div>
+        <div class="lab-actions">
+          <button class="btn small" id="labReset" type="button">Reset</button>
+          <button class="btn primary small" id="labSpeak" type="button" disabled>Let the brain speak</button>
+        </div>
+        <div class="transcript" id="labTranscript" aria-live="polite"></div>
+        <div class="lab-keys">
+          <p>Keyboard and screen-reader mode — activate a concept:</p>
+          <div class="keys" id="labKeys"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="quiz">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Ten-question quiz</div>
+      <h2>Can you explain private document chat?</h2>
+      <p>No sign-up, no score stored. Each answer comes with a one-sentence explanation, so the quiz teaches while it tests. Ten correct answers and you can explain Daftar to your boss.</p>
+    </div>
+    <div class="quiz-wrap reveal">
+      <aside class="quiz-side">
+        <div><div style="font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);font-weight:800">Your score</div>
+        <div class="score"><span id="quizScore">0</span><small> / 10</small></div>
+        <p id="quizTier">Answer the first question to begin.</p></div>
+        <div class="bar" aria-hidden="true"><i id="quizBar"></i></div>
+        <p style="font-size:.72rem;color:var(--faint);margin:0">Progress <span id="quizProgress">0 / 10</span></p>
+      </aside>
+      <div class="quiz-card" id="quizCard" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="value">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Who it is for</div>
+      <h2>Built for people who cannot send their documents to the cloud.</h2>
+      <p>Lawyers, accountants, clinicians, researchers, agencies and operations teams all face the same trade-off: useful answers versus confidential files. Daftar removes the trade-off.</p>
+    </div>
+    <div class="value-grid reveal">
+      <div class="value-card"><div class="ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v18M5 8h14M5 16h14"/></svg></div><h3>Legal &amp; compliance</h3><p>Ask a contract about renewal, liability or notice periods and get the clause, not a paraphrase.</p></div>
+      <div class="value-card"><div class="ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 19V5M4 19h16"/><path d="M8 15l4-5 3 3 4-6"/></svg></div><h3>Finance &amp; operations</h3><p>Reconcile invoices, find the reason a target was missed, and keep the source line in view.</p></div>
+      <div class="value-card"><div class="ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 21s-7-4.4-7-10a7 7 0 1114 0c0 5.6-7 10-7 10z"/><circle cx="12" cy="11" r="2.5"/></svg></div><h3>Healthcare &amp; research</h3><p>Work through notes and papers on a machine you control, without a data-processing agreement.</p></div>
+      <div class="value-card"><div class="ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 5h16v14H4z"/><path d="M8 9h8M8 13h5"/></svg></div><h3>Government &amp; NGOs</h3><p>Keep citizen, grant and case files inside the organisation — including offline at a field office.</p></div>
+      <div class="value-card"><div class="ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3 2.5-5 6-5s6 2 6 5"/><path d="M17 8h4M19 6v4"/></svg></div><h3>Agencies &amp; consultants</h3><p>Keep every client's documents in a separate collection on your own laptop. No shared cloud tenant.</p></div>
+      <div class="value-card"><div class="ico"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg></div><h3>Solo professionals</h3><p>One install, no subscription, no per-seat API bill. Runs on a normal laptop with a small model.</p></div>
+    </div>
+    <div class="roi reveal">
+      <div>
+        <h3>What is searching costing you?</h3>
+        <p>Move the sliders to estimate the time spent hunting through documents. This is a simple calculator, not a promise — it counts search time only.</p>
+        <div class="roi-fields">
+          <div class="field"><label for="roiSearches">Document searches per day <b id="roiSearchesOut">12</b></label><input id="roiSearches" type="range" min="1" max="50" value="12"></div>
+          <div class="field"><label for="roiMinutes">Minutes saved per search <b id="roiMinutesOut">6</b></label><input id="roiMinutes" type="range" min="1" max="30" value="6"></div>
+          <div class="field"><label for="roiRate">Fully loaded hourly cost <b id="roiRateOut">$45</b></label><input id="roiRate" type="range" min="15" max="150" step="5" value="45"></div>
+        </div>
+      </div>
+      <div class="roi-out">
+        <div class="big" id="roiYear">$13,608</div>
+        <div class="sub">estimated value per year, one person</div>
+        <div class="line"><span>Hours per month</span><b id="roiHours">25.2</b></div>
+        <div class="line"><span>Value per month</span><b id="roiMonth">$1,134</b></div>
+        <div class="line"><span>Working days per month</span><b>21</b></div>
+        <p class="fine">Illustrative estimate: searches × minutes × 21 working days ÷ 60 × hourly cost. It excludes setup, review and the value of better decisions.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section alt" id="benchmarks">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Measured, not promised</div>
+      <h2>Numbers you can reproduce.</h2>
+      <p>These are development-machine measurements, not a leaderboard claim. The evaluation scripts and questions are in the repository so you can rerun them on your own hardware and with your own documents.</p>
+    </div>
+    <div class="table-wrap reveal">
+      <table>
+        <thead><tr><th>What was measured</th><th>Result</th><th>Conditions</th></tr></thead>
+        <tbody>
+          <tr><td><b>Answer correctness</b></td><td><span class="good">25 / 27</span> (93%)</td><td class="muted">Qwen3.5-2B · 27 question evaluation set</td></tr>
+          <tr><td><b>Answers with a citation</b></td><td><span class="good">26 / 27</span> (96%)</td><td class="muted">Same run · citation must point to a real passage</td></tr>
+          <tr><td><b>Strong prompt injections hijacked</b></td><td><span class="good">0 / 8</span></td><td class="muted">gemma3:1b · attacks embedded in documents</td></tr>
+          <tr><td><b>Retrieval recall@4</b></td><td><span class="good">1.000</span></td><td class="muted">1,000-character blocks · English + Arabic set</td></tr>
+          <tr><td><b>Structure-aware retrieval</b></td><td><span class="good">1.000</span> recall@4</td><td class="muted">Section-aware chunking · naive baseline 0.700</td></tr>
+          <tr><td><b>Warm answer latency</b></td><td><span class="good">0.3 s</span></td><td class="muted">RTX 3090 · gemma3:1b · 368 tokens/s · cold start 9.4 s</td></tr>
+          <tr><td><b>OCR on CPU</b></td><td><span class="good">23 s / page</span></td><td class="muted">PaddleOCR-VL 1.6 · 1.9 GB RAM · English + Arabic lines</td></tr>
+          <tr><td><b>Automated tests</b></td><td><span class="good">107 offline + 3 live</span></td><td class="muted">All passing · live tests need a local model</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="method reveal">Latency depends on your hardware. A 2B model on a modern laptop is slower than the RTX figure and still usable; a GPU makes it feel instant. OCR speed depends on page complexity. The retrieval numbers are on a fixed evaluation set, not a claim about every document. <a href="research.html">Read the research notes</a>.</p>
+  </div>
+</section>
+
+<section class="section" id="architecture">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Architecture &amp; privacy</div>
+      <h2>Small surface. Clear rules.</h2>
+      <p>Daftar is a local web app: a Python server on loopback, a static interface, and a model engine you choose. There is no cloud account, no analytics script and no third-party font.</p>
+    </div>
+    <div class="arch-grid reveal">
+      <div class="arch-card"><h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>Two engines, one app</h3><p>Use the built-in llama.cpp engine for chat with no extra install, or connect Ollama for chat, embeddings and vision OCR. Any OpenAI-compatible server can be enabled explicitly for advanced setups.</p></div>
+      <div class="arch-card"><h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3z"/><path d="M4 7v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Your data in one folder</h3><p>Documents, extracted text, the SQLite index and chat history live under <code>~/.local/share/daftar</code> on Linux, <code>~/Library/Application Support/Daftar</code> on macOS and <code>%APPDATA%\Daftar</code> on Windows. Delete the folder and everything is gone.</p></div>
+      <div class="arch-card"><h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>Locked to your machine</h3><p>The server binds to <code>127.0.0.1</code>, validates the Host header, requires a custom header on writes and blocks cross-origin preflights. The child engine can run with a random API key. Remote engines are opt-in, never silent.</p></div>
+      <div class="arch-card"><h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg>No telemetry, ever</h3><p>No analytics, no crash reporting, no remote fonts or scripts. The app works with the network cable unplugged. The only network calls are the ones you configure.</p></div>
+    </div>
+    <div class="threat reveal"><b>Honest threat model:</b> “local” means your documents are not sent to a cloud service. It does not protect against malware, a compromised operating-system account, or someone who can read your disk. Use full-disk encryption and normal access controls for that layer.</div>
+  </div>
+</section>
+
+<section class="section alt" id="start">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Get started</div>
+      <h2>Three commands to a private document chat.</h2>
+      <p>Python 3.11+ and about 2 GB of free disk for a small model. No account, no API key, no cloud sign-up. The built-in engine handles chat; add Ollama if you want vision OCR for scans.</p>
+    </div>
+    <div class="start-grid reveal">
+      <div>
+        <div class="code-card">
+          <div class="code-head"><span>Terminal</span><button type="button" class="copy" data-copy="install">Copy</button></div>
+          <pre id="installCode"><span class="c"># 1. get the code</span>
+git clone https://github.com/M0-AR/daftar.git
+cd daftar
+
+<span class="c"># 2. install into a virtual environment</span>
+python -m venv .venv
+<span class="c"># Windows: .venv\Scripts\activate</span>
+<span class="c"># macOS / Linux:</span>
+source .venv/bin/activate
+pip install -e .
+
+<span class="c"># 3. run</span>
+<span class="k">daftar</span></pre>
+        </div>
+        <div class="code-card" style="margin-top:14px">
+          <div class="code-head"><span>Optional: scans and embeddings via Ollama</span><button type="button" class="copy" data-copy="ollama">Copy</button></div>
+          <pre id="ollamaCode">ollama pull nomic-embed-text
+ollama pull qwen3.5:2b
+<span class="c"># then choose Ollama in Settings → Engine</span>
+<span class="c"># and pick a vision model for scanned PDFs</span></pre>
+        </div>
+      </div>
+      <div>
+        <div class="card" style="margin-bottom:16px">
+          <h3 style="margin-bottom:10px">Your first five minutes</h3>
+          <ol style="margin:0;padding-left:20px;color:var(--muted);font-size:.86rem;line-height:1.7">
+            <li>The window opens by itself. If you started it headless, open the address it printed.</li>
+            <li>Create a collection, for example <b>Supplier contracts</b>.</li>
+            <li>Drop in two or three documents you already know well.</li>
+            <li>Ask a question whose answer you can verify by eye.</li>
+            <li>Click the citation and compare it with the source passage.</li>
+          </ol>
+        </div>
+        <div class="card">
+          <h3 style="margin-bottom:10px">What you need</h3>
+          <div style="display:flex;justify-content:space-between;gap:10px;font-size:.82rem;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--muted)">Operating system</span><b>Windows, macOS, Linux</b></div>
+          <div style="display:flex;justify-content:space-between;gap:10px;font-size:.82rem;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--muted)">Python</span><b>3.11 or newer</b></div>
+          <div style="display:flex;justify-content:space-between;gap:10px;font-size:.82rem;padding:7px 0;border-bottom:1px solid var(--line)"><span style="color:var(--muted)">Disk for a small model</span><b>~1.3–2 GB</b></div>
+          <div style="display:flex;justify-content:space-between;gap:10px;font-size:.82rem;padding:7px 0"><span style="color:var(--muted)">GPU</span><b>Optional</b></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="faq">
+  <div class="container">
+    <div class="section-head reveal">
+      <div class="eyebrow">Questions, answered plainly</div>
+      <h2>Everything a beginner asks.</h2>
+      <p>If your question is not here, the beginner guide in the repository walks through the whole app without jargon.</p>
+    </div>
+    <div class="faq reveal">
+      <details><summary>Is my data really private?</summary><p>Yes, in the sense that matters: your documents are read and indexed on your computer, and the model runs on your computer. Daftar does not create an account, does not send telemetry and does not call a cloud API unless you explicitly configure a remote engine. The honest limit: local software cannot protect you from malware or from someone with access to your operating-system account.</p></details>
+      <details><summary>Does it need the internet?</summary><p>Only to download the app and a model the first time. After that, the app, the index and the model work offline. The interface loads no remote fonts, scripts or images.</p></details>
+      <details><summary>Which files can I add?</summary><p>PDF, DOCX, Markdown, plain text, HTML and CSV. Scanned PDFs need OCR: choose Ollama with a vision model such as PaddleOCR-VL. The built-in engine is chat-only, so it will tell you when a scan has no extractable text instead of pretending.</p></details>
+      <details><summary>Do I need a GPU?</summary><p>No. A 2-billion-parameter model runs on a normal CPU and is fine for document questions. A GPU makes answers much faster; the warm latency figure on this page was measured on an RTX 3090.</p></details>
+      <details><summary>Does it work with Arabic?</summary><p>Yes. Arabic text is normalised for search, Arabic documents are indexed, and you can ask questions in Arabic. The interface is in English. Mixed Arabic/English documents work, and the invoice in the demo includes an Arabic note you can ask about.</p></details>
+      <details><summary>How is it different from a cloud chatbot?</summary><p>A cloud chatbot is a general assistant that may or may not have your documents. Daftar is a retrieval system first: it finds the exact passages in your files, then a local model writes from them. The difference is privacy plus verifiability — every claim has a source you can open.</p></details>
+      <details><summary>What does the match score mean?</summary><p>It is a relevance indicator for the retrieved passage, not a probability that the answer is true. Use it to compare sources, then read the citation. In the desktop app the score comes from the hybrid retrieval and reranking stage.</p></details>
+      <details><summary>Can I delete everything?</summary><p>Yes. Delete a collection or document in the interface, or remove the data folder (<code>~/.local/share/daftar</code>, <code>~/Library/Application Support/Daftar</code> or <code>%APPDATA%\Daftar</code>, or the path in <code>DAFTAR_HOME</code>) to erase the index, extracted text, chat history and settings. Original files you added from elsewhere are not touched unless you copied them into the data folder.</p></details>
+      <details><summary>Is it free? Can I use it at work?</summary><p>Daftar is open source under the MIT licence. You can use it commercially, modify it and redistribute it, provided you keep the copyright notice. There is no per-seat fee and no token bill.</p></details>
+      <details><summary>Can I use my own model?</summary><p>Yes. Add any GGUF chat model to the built-in engine, or point Daftar at an Ollama or OpenAI-compatible server. Embeddings and OCR still need a provider that supports them; the app tells you what is missing instead of failing silently.</p></details>
+      <details><summary>Why does the built-in engine not do everything?</summary><p>It is deliberately small: one process, chat only, no extra install. Embeddings and vision OCR need additional model files, so they are handled through Ollama or another compatible provider. The app reports the exact capability gap rather than degrading quietly.</p></details>
+      <details><summary>How do I publish this site?</summary><p>The site is the <code>docs/</code> folder. Push the repository to GitHub, open Settings → Pages, choose “Deploy from a branch”, select <code>main</code> and <code>/docs</code>, and save. GitHub serves <code>docs/index.html</code> at <code>https://M0-AR.github.io/daftar/</code>. The <code>.nojekyll</code> file is already there.</p></details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="footer">
+  <div class="container">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top" aria-label="Daftar home">
+          <svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lg2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0f766e"/></linearGradient></defs><rect x="10" y="6" width="44" height="52" rx="7" fill="url(#lg2)"/><rect x="10" y="6" width="9" height="52" rx="4" fill="#0b4f4a" opacity=".55"/><path d="M25 20h21M25 28h21M25 36h14" stroke="#ecfdf5" stroke-width="3.2" stroke-linecap="round"/><path d="M40 6h9v19l-4.5-3.6L40 25z" fill="#fbbf24"/></svg>
+          <span>Daftar<small>private document chat</small></span>
+        </a>
+        <p>Daftar (دفتر) means notebook. It is a local-first document assistant for people who cannot send their files to the cloud. Open source, MIT licensed, no telemetry.</p>
+      </div>
+      <div class="foot-col">
+        <h4>Explore</h4>
+        <a href="#demo">Interactive demo</a>
+        <a href="#lab">Knowledge Lab</a>
+        <a href="#quiz">Quiz</a>
+        <a href="#benchmarks">Benchmarks</a>
+        <a href="#faq">FAQ</a>
+      </div>
+      <div class="foot-col">
+        <h4>Technical notes</h4>
+        <a href="gap.html">Capability gaps</a>
+        <a href="research.html">Retrieval research</a>
+        <a href="distribution.html">Distribution</a>
+        <a href="#start">Get started</a>
+        <a href="#architecture">Privacy model</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>© <span id="year">2026</span> Daftar contributors. MIT licence.</span>
+      <span>No cookies. No analytics. This page loads no third-party assets.</span>
+    </div>
+  </div>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research log — Daftar</title>
+<meta name="description" content="Every retrieval, security and packaging decision, with its source and local measurement.">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='10' y='6' width='44' height='52' rx='7' fill='%2314b8a6'/%3E%3Cpath d='M25 20h21M25 28h21M25 36h14' stroke='%23ecfdf5' stroke-width='3.2' stroke-linecap='round'/%3E%3Cpath d='M40 6h9v19l-4.5-3.6L40 25z' fill='%23fbbf24'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="doc">
+<a class="skip" href="#main">Skip to content</a>
+<header class="nav"><div class="nav-in">
+  <a class="brand" href="index.html" aria-label="Daftar home"><svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lgd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2dd4bf"/><stop offset="1" stop-color="#0f766e"/></linearGradient></defs><rect x="10" y="6" width="44" height="52" rx="7" fill="url(#lgd)"/><rect x="10" y="6" width="9" height="52" rx="4" fill="#0b4f4a" opacity=".55"/><path d="M25 20h21M25 28h21M25 36h14" stroke="#ecfdf5" stroke-width="3.2" stroke-linecap="round"/><path d="M40 6h9v19l-4.5-3.6L40 25z" fill="#fbbf24"/></svg><span>Daftar<small>private document chat</small></span></a>
+  <nav class="nav-links" aria-label="Main"><a href="index.html">Showcase</a><a href="index.html#benchmarks">Benchmarks</a><a href="index.html#faq">FAQ</a></nav>
+</div></header>
+<main class="container prose" id="main">
+  <p class="doc-back"><a href="index.html">← Back to the showcase</a></p>
+<h1>Research log: best practices checked against Daftar (2026-11-09)</h1>
+<p>Rule followed: no change without (1) an external source and (2) a local measurement or a failing test
+that the change fixes. Rejected ideas are listed too, with the evidence against them.</p>
+<p>Retrieval numbers come from <code>scripts/eval_retrieval.py</code> (27 labelled questions: an English contract,
+English research notes, two Arabic documents, one vocalized). Live numbers come from the local Ollama
+(qwen2.5:1.5b, qwen2:0.5b) on this machine.</p>
+<h2>Adopted</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>Finding (source)</th>
+<th>Evidence here</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>SQLite FTS5 <code>unicode61</code> treats every character outside <code>L* N* Co</code> as a separator, so combining marks (Arabic harakat, Mn) split words (<a href="https://www.sqlite.org/fts5.html">SQLite FTS5 docs</a>)</td>
+<td>Vocalized كَتَبَ was indexed as ك/ت/ب; <strong>0 of 4</strong> Arabic questions answered</td>
+<td><code>textnorm.py</code>: NFKC + Arabic normalization (strip harakat/tatweel, unify أإآٱ→ا, ى→ي, ة→ه) before indexing and querying; index migrated (schema v2)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Arabic IR normalization + Light10 stemming (<a href="https://ciir.cs.umass.edu/pubfiles/ir-249.pdf">Larkey et al., SIGIR 2002</a>; <a href="https://trec.nist.gov/pubs/trec10/papers/UMass_TREC10_Final.pdf">UMass TREC-10</a>; <a href="https://github.com/AbdeldjalilChougui/arabic-normalize">arabic-normalize</a>)</td>
+<td>With 500-char blocks: recall@4 0.963 → <strong>1.000</strong>, MRR 0.920 → 0.957 (ablation)</td>
+<td>Light10-style prefix/suffix stripping for Arabic tokens</td>
+</tr>
+<tr>
+<td>3</td>
+<td>NFKC folds ligatures and Arabic presentation forms from PDF text layers (<a href="https://www.nutrient.io/blog/best-python-pdf-libraries/">PDF parser comparisons 2026</a>)</td>
+<td><code>ﻣﺮﺎﺑﺤﺔ</code> → <code>مرابحة</code>, <code>ﬁ</code> → <code>fi</code> (test)</td>
+<td>Applied to search and to extracted PDF text; line-break hyphenation re-joined</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Fuse BM25 and vectors with Reciprocal Rank Fusion (k=60); don't add scores of different scales (<a href="https://denser.ai/blog/hybrid-search-for-rag/">denser.ai 2026</a>, <a href="https://dataaspirant.com/blog/hybrid-search/">dataaspirant</a>)</td>
+<td>Score-weighted re-sorting <strong>never beat RRF</strong> (MRR 0.963 vs 0.981 at 1000 chars)</td>
+<td>Order always by RRF; "Improve relevance" now only drops weak passages, never reorders</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Recursive splitting (paragraph → line → sentence → word) is the recommended default (<a href="https://www.premai.io/blog/rag-chunking-strategies-the-2026-benchmark-guide/">PremAI 2026</a>, <a href="https://www.firecrawl.dev/blog/best-chunking-strategies-rag">Firecrawl</a>)</td>
+<td>1000 chars: MRR 0.981 → <strong>1.000</strong>; 500 chars: recall@2 0.963 → 1.000; 0 blocks end mid-sentence</td>
+<td>Boundary priority in <code>chunk_pages</code> (Latin + Arabic punctuation)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Ollama silently drops the start of prompts longer than <code>num_ctx</code> (<a href="https://docs.ollama.com/faq">Ollama FAQ</a>, <a href="https://particula.tech/blog/ollama-num-ctx-silent-prompt-truncation">particula.tech</a>, <a href="https://news.ycombinator.com/item?id=42833427">HN/Aider</a>)</td>
+<td>Measured: num_ctx 2048 → model read <strong>2048 of ~6000</strong> tokens</td>
+<td><code>fit_prompt</code>: per-script token estimate, num_ctx from {4K, 8K, 16K, 32K} ≤ the model's real context length (<code>/api/show</code>), trims history then weakest passages</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Token cost differs by script</td>
+<td>Measured chars/token: English 4.85, plain Arabic 2.42, <strong>vocalized Arabic 1.16</strong></td>
+<td>Estimate counts Arabic chars as 1 token, others as 1/3.5 (never under-counts any measured text)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Local HTTP servers MUST validate <code>Origin</code> and return 403 when present and invalid (<a href="https://modelcontextprotocol.io/specification/2025-03-26/basic/transports">MCP transports spec</a>)</td>
+<td>Failing test with <code>Origin: https://evil.example</code></td>
+<td>Origin must equal our own page; Host loopback check and X-Daftar header kept</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>BaseHTTPMiddleware</code> hides client disconnects from streaming responses; use pure ASGI middleware (<a href="https://github.com/Kludex/starlette/pull/1715">Starlette PR #1715</a>, <a href="https://github.com/Kludex/starlette/pull/2620">#2620</a>, <a href="https://github.com/quern-dev/quern/issues/208">quern #208</a>)</td>
+<td>Minimal app: cleanup after disconnect in 0.1 s; with BaseHTTPMiddleware <strong>never</strong> (15 s). Live: Stop lost the partial answer</td>
+<td>Guard rewritten as pure ASGI; generator closed on disconnect → Ollama stream closed, partial answer saved and marked stopped (live: 0.2 s)</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Stream uploads in chunks with a running size limit (<a href="https://fast.io/resources/fastapi-upload-file-size-limit/">fast.io</a>, <a href="https://github.com/fedirz/fastapi-file-upload-benchmark">upload benchmark</a>)</td>
+<td>Uploads were read fully into memory, no limit</td>
+<td>1 MB chunks to a temp file, SHA-256 while streaming, 200 MB per-file cap, no leftovers (test)</td>
+</tr>
+<tr>
+<td>11</td>
+<td>OWASP LLM01: limit the model's role, require citations, validate output with deterministic code (<a href="https://genai.owasp.org/llmrisk/llm01-prompt-injection/">OWASP LLM01:2025</a>); documents can impersonate chat-template control tokens (<a href="https://arxiv.org/pdf/2606.09005">arXiv 2606.09005</a>)</td>
+<td>Test: passage with <code>&lt;end_of_turn&gt;&lt;start_of_turn&gt;user …</code></td>
+<td>Chat-template control tokens removed from passages and file names; citation chips only for existing sources</td>
+</tr>
+<tr>
+<td>12</td>
+<td>Model choice matters for injection resistance</td>
+<td>Plain injection attack: qwen2:0.5b obeyed <strong>6/6</strong>, qwen2.5:1.5b <strong>0/6</strong></td>
+<td>Fallback picks the <em>largest</em> installed chat model, not the first alphabetically</td>
+</tr>
+<tr>
+<td>13</td>
+<td>Ollama <code>/api/show</code> reports <code>&lt;arch&gt;.context_length</code> and <code>capabilities</code> (checked locally: <code>qwen2.context_length: 32768</code>, <code>['completion','tools']</code>)</td>
+<td>An embedder without "embed" in its name (e.g. all-minilm) was offered as a chat model</td>
+<td>Models classified by capability (name heuristic only for old Ollama); metadata cached per digest</td>
+</tr>
+<tr>
+<td>14</td>
+<td>nomic-embed-text needs <code>search_query:</code> / <code>search_document:</code> prefixes; Ollama does not add them (<a href="https://huggingface.co/nomic-ai/nomic-embed-text-v1.5">model card</a>)</td>
+<td>Already implemented</td>
+<td>Kept; embedding requests now also set <code>num_ctx</code> from the embedder's context length (Ollama default window is smaller)</td>
+</tr>
+<tr>
+<td>15</td>
+<td>Transforming untrusted text (Spotlighting's "encoding" mode) beats delimiters (<a href="https://arxiv.org/pdf/2403.14720">Hines et al., arXiv 2403.14720</a>; <a href="https://arxiv.org/pdf/2505.14534">Gemini defense lessons, arXiv 2505.14534</a>)</td>
+<td>gemma3:1b, strong attack (fake turns + repeated order): current prompt <strong>8/8 hijacked</strong>, JSON-quoted passages <strong>0/8</strong>; answers (27 questions): gemma correct 20→20, cited <strong>7→19</strong>; qwen2.5:1.5b correct 20→<strong>22</strong>, cited 8→4 (<code>scripts/eval_answers.py</code>, <code>scripts/eval_injection_strong.py</code>)</td>
+<td>Passages are sent as one JSON object per line (<code>PASSAGE_FORMAT = "json"</code>); JSON escaping keeps a document's line breaks and quotes from posing as new instruction lines</td>
+</tr>
+<tr>
+<td>16</td>
+<td>Contextual chunk headers: prepend the section path to indexed/embedded text, not to displayed text (<a href="https://deepwiki.com/NirDiamant/RAG_Techniques/4.1-contextual-chunk-headers">RAG_Techniques CCH</a>; <a href="https://dev.to/recallrundev/rag-chunking-measured-heading-aware-chunks-doubled-hit1-on-the-fastapi-docs-5hh7">heading-aware chunks doubled hit@1</a>)</td>
+<td>Structure eval (handbook + code, 10 q): recall@4 0.700 → <strong>1.000</strong>, MRR 0.650 → 0.900; base set unchanged (1.000/1.000)</td>
+<td><code>chunk_sections</code>: heading path per passage (Markdown, Word styles, HTML, Section/Article/Clause, numbered, Arabic markers); stored as <code>chunks.section</code>; shown in citations</td>
+</tr>
+<tr>
+<td>17</td>
+<td>Code search: index whole identifiers plus case/underscore parts, split before lowercasing; same for queries (<a href="https://arxiv.org/html/2605.18561">arXiv 2605.18561</a>; <a href="https://github.com/Hendrixx-RE/cornifer/pull/2">cornifer PR #2</a>)</td>
+<td>Structure eval 0.600/0.450 → <strong>0.700/0.650</strong>; base set unchanged</td>
+<td><code>identifier_parts</code> in <code>textnorm.py</code> (whole identifier kept, as the paper advises for Python)</td>
+</tr>
+<tr>
+<td>18</td>
+<td>Default search model: Qwen3-Embedding-0.6B leads small multilingual embedders (MTEB multilingual 64.33 vs bge-m3 59.56, embeddinggemma 61.15) and lists Arabic dialects; nomic-embed-text is English-focused (<a href="https://www.morphllm.com/ollama-embedding-models">morphllm 2026</a>, <a href="https://regolo.ai/embeddinggemma-2-vs-qwen3-embedding-benchmarks/">regolo</a>, <a href="https://github.com/QwenLM/Qwen3-Embedding">Qwen3-Embedding</a>); queries need <code>Instruct: …\nQuery:</code>, documents no prefix (<a href="https://huggingface.co/Qwen/Qwen3-Embedding-0.6B">model card</a>)</td>
+<td>Not yet measured here (model not downloaded); tests pin the exact query/document formats</td>
+<td><code>embed_model</code> default <code>qwen3-embedding:0.6b</code>; any installed embedder is used when the configured one is missing (previously search silently fell back to keywords)</td>
+</tr>
+<tr>
+<td>19</td>
+<td>OCR: PaddleOCR-VL-1.6 (0.9B) is at the top of OmniDocBench (96.34) with the lowest Arabic edit distance in its paper; Tesseract trails on Arabic (<a href="https://arxiv.org/pdf/2606.03264">PaddleOCR-VL-1.6</a>, <a href="https://www.docsumo.com/blog/best-ocr-models">docsumo 2026</a>, <a href="https://arxiv.org/pdf/2502.14949">KITAB-Bench</a>); Ollama supports the <code>paddleocr</code> architecture (<a href="https://github.com/ollama/ollama/issues/12685">ollama #12685</a>)</td>
+<td>Ollama 0.23.2 here: <code>unknown model architecture: 'paddleocr'</code>; Qwen3-VL-2B loads but takes &gt;15 min/page on CPU and the runner crashed (<code>GGML_ASSERT</code>) on an image. Pipeline verified with tests and live up to the model call (clear error, no hang)</td>
+<td>Pages without a text layer and image uploads are rendered with PDFium (pypdfium2, BSD/Apache) and read by the OCR model (<code>OCR:</code> prompt for PaddleOCR, plain instruction for other vision models); progress shown while reading</td>
+</tr>
+<tr>
+<td>20</td>
+<td>Ollama silently runs on CPU when its GPU libraries are missing; <code>/api/ps</code> reports <code>size_vram</code> per loaded model</td>
+<td>Here: <code>/usr/local/lib/ollama</code> empty, <code>size_vram: 0</code>, ~19 s per answer</td>
+<td>Daftar reports <code>compute: cpu/partial/gpu</code> and warns in Settings, the sidebar and Help</td>
+</tr>
+<tr>
+<td>21</td>
+<td>PyInstaller cannot cross-compile; build and run the binary on each OS in a CI matrix (<a href="https://github.com/pyinstaller/pyinstaller/issues/6296">pyinstaller #6296</a>, <a href="https://data-dive.com/multi-os-deployment-in-cloud-using-pyinstaller-and-github-actions/">data-dive</a>)</td>
+<td>Linux frozen build: <code>--self-test</code> (pdfium render, PDF/DOCX read, Unicode PDF export, Arabic FTS) and <code>scripts/smoke_build.py</code> pass</td>
+<td><code>.github/workflows/build.yml</code> (Windows/macOS/Linux, smoke test, artifacts); not run yet: the repo has no GitHub remote</td>
+</tr>
+<tr>
+<td>22</td>
+<td>Small-model choice: published results favour Qwen 2–4B over Gemma 3 1B for grounded QA (<a href="https://arxiv.org/html/2606.00683v1">OCC-RAG</a>, <a href="https://arxiv.org/pdf/2608.01409">claim verification</a>)</td>
+<td>Qwen3.5-2B (local GGUF) outputs only "????" on Ollama 0.23.2 (unsupported <code>qwen35</code> architecture); not measurable until Ollama is upgraded</td>
+<td>Superseded by #25 once Ollama 0.40.11 could load the GGUF</td>
+</tr>
+<tr>
+<td>23</td>
+<td>Local AI servers share the OpenAI API: LM Studio :1234, Jan :1337, llama.cpp :8080, vLLM :8000, KoboldCpp :5001, LocalAI :8080, GPT4All :4891, Ollama :11434/v1; images must go inline as base64 data URLs (<a href="https://cohorte.co/blog/local-llm-openai-compatible-server">cohorte 2026</a>, <a href="https://llmcompat.com/guides/local-openai-compatible-api-setup">llmcompat</a>, <a href="https://www.promptquorum.com/local-llms/local-llm-openai-compatible-api">promptquorum</a>, <a href="https://github.com/lmstudio-ai/lmstudio-bug-tracker/issues/1752">LM Studio #1752</a>)</td>
+<td>Live against Ollama's /v1: chat, embeddings and PaddleOCR-VL OCR through the OpenAI path; full Daftar answer on that engine (77% match, cited)</td>
+<td>Engine choice in Settings (Ollama or OpenAI-compatible, URL, optional key) with "Find AI apps" detection; same local-only rule; OCR models excluded from chat</td>
+</tr>
+<tr>
+<td>24</td>
+<td>With Ollama 0.40.11 on the RTX 3090</td>
+<td>gemma3:1b warm answer 0.3 s at 368 tokens/s (was ~19 s on CPU); PaddleOCR-VL page OCR word-perfect in English, ~2 word errors in 40 in Arabic; scan → OCR → hybrid search → cited answer in &lt; 1 s</td>
+<td>Paraphrase eval: hybrid (qwen3-embedding:0.6b) recall@2 0.90 → 1.00, MRR 0.80 → 0.85 vs keyword-only</td>
+</tr>
+<tr>
+<td>25</td>
+<td>Default chat model: Qwen3.5-2B is Apache-2.0, on the Ollama registry (<code>:2b</code> tag verified 200) and beats Gemma 3 1B on grounded QA and citations; Gemma's custom licence is unsuitable for a paid app. Qwen3.5 reasons before answering, so the API must send <code>think:false</code> (<a href="https://docs.ollama.com/api/chat">Ollama API</a>, <a href="https://huggingface.co/unsloth/Qwen3.5-2B-GGUF">Qwen3.5-2B GGUF</a>)</td>
+<td><code>scripts/eval_answers.py</code>, JSON-quoted passages: <strong>25/27 correct, 26/27 cited</strong> vs gemma3:1b 19/27, 19/27; plain passages 23/27 vs 21/27. Injection: 0/6 hijacked, 6/6 correct in all variants. Thinking off: "OK" 515 → 2 tokens, 0.04 s</td>
+<td><code>chat_model</code> default <code>qwen3.5:2b</code>; new <code>think</code> setting (default off) sent to Ollama chat, toggle in Settings; script evals accept <code>EVAL_THINK=on</code> to compare</td>
+</tr>
+</tbody>
+</table>
+<h2>Considered and rejected (with evidence)</h2>
+<table>
+<thead>
+<tr>
+<th>Idea (source)</th>
+<th>Why not</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Spotlighting with delimiters around passages (<a href="https://arxiv.org/pdf/2403.14720">Hines et al., arXiv 2403.14720</a>)</td>
+<td>Measured on qwen2.5:1.5b: injection success went <strong>0/6 → 6/6</strong> with randomized delimiters. The paper itself advises against delimiting alone.</td>
+</tr>
+<tr>
+<td>Datamarking (replace spaces with ^)</td>
+<td>Blocks the strong attack on gemma3:1b (0/8) but leaks <code>^</code> into answers ("^18,400^USD.^"); JSON quoting blocks it equally without corrupting output.</td>
+</tr>
+<tr>
+<td>Sandwich defense (repeat the task after the passages)</td>
+<td>gemma3:1b strong attack: still <strong>8/8 hijacked</strong>.</td>
+</tr>
+<tr>
+<td>Cross-encoder reranker</td>
+<td>Ollama has no official rerank endpoint (<a href="https://github.com/ollama/ollama/issues/16076">ollama #16076</a>); generate-based workarounds give uniform scores. Revisit when Ollama ships <code>/api/rerank</code>.</td>
+</tr>
+<tr>
+<td>"Lost in the middle" edge ordering (<a href="https://arxiv.org/pdf/2410.05983">arXiv 2410.05983</a>)</td>
+<td>Paper reports negligible gains for small retrieval sets; Daftar sends ≤ 6 passages by default. Best passage stays first, question last.</td>
+</tr>
+<tr>
+<td>Larger default blocks (400–512 tokens ≈ 1600–2000 chars)</td>
+<td>Eval: 1000 = 1600 = 2400 chars here, 500 slightly worse. 1000 chars (~250 tokens, 15% overlap) is inside the researched 200–512 token range and keeps prompts small for 1B models.</td>
+</tr>
+<tr>
+<td>FTS5 <code>porter</code> stemmer</td>
+<td>English-only (SQLite docs); the prefix rule already handles English variants and Light10 handles Arabic.</td>
+</tr>
+<tr>
+<td>PyMuPDF instead of pypdf</td>
+<td>Faster, but AGPL-3.0; pypdf scored F1 ≈ 0.95–0.97 on legal/financial/manual documents (<a href="https://arxiv.org/html/2410.09871v1">arXiv 2410.09871</a>). Kept pypdf + NFKC/de-hyphenation clean-up.</td>
+</tr>
+</tbody>
+</table>
+<h2>Findings with gemma3:1b (installed 2026-11-09)</h2>
+<ul>
+<li>Live test passes with a citation ("2,350 euros [1]").</li>
+<li>qwen2.5:1.5b resists the same strong attack under every variant (0/6), JSON included: no regression on the fallback model.</li>
+<li>Control-token stripping alone did <strong>not</strong> stop the strong attack (8/8 hijacked with or without it): the repeated plain-text order is enough. Stripping is kept as a cheap layer; JSON quoting is what stops it.</li>
+<li>Ollama on this machine runs CPU-only (<code>/usr/local/lib/ollama</code> is empty, startup log <code>library=cpu</code>, <code>total_vram 0 B</code>): about 19 s per answer. Fix: reinstall Ollama with its CUDA libraries.</li>
+</ul>
+<h2>Findings with qwen3.5:2b (installed 2026-11-11)</h2>
+<ul>
+<li>Unsloth GGUF Q4_K_M (1.28 GB): sha-256 matches the download checksum; registered with <code>RENDERER qwen3.5</code> / <code>PARSER qwen3.5</code> on Ollama 0.40.11.</li>
+<li>Answer eval (27 questions, JSON-quoted passages): 25/27 correct and 26/27 cited, vs gemma3:1b 19/27 and 19/27; plain passages 23/27 vs 21/27. It answers Arabic questions instead of replying with a bare citation.</li>
+<li>Injection eval: 0/6 hijacked and 6/6 correct fee in all three variants (current/spotlight/datamark).</li>
+<li>Thinking is on by default (515 hidden tokens to answer "OK"); <code>think:false</code> cuts that to 2 tokens in 0.04 s on the RTX 3090. Daftar sends <code>think:false</code> by default (Settings toggle can re-enable it).</li>
+</ul>
+<h2>Still to verify</h2>
+<ul>
+<li><code>nomic-embed-text</code>: <code>python scripts/eval_retrieval.py --embed</code> to measure hybrid search on the same set.</li>
+</ul>
+  <p class="doc-back bottom"><a class="btn small" href="index.html">← Back to the showcase</a></p>
+</main>
+<footer class="footer"><div class="container"><div class="foot-bottom"><span>© 2026 Daftar contributors. MIT licence.</span><span>No cookies. No analytics. No third-party assets.</span></div></div></footer>
+</body>
+</html>
