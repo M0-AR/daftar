@@ -1,4 +1,5 @@
-"""Local HTTP API + static UI. Binds to loopback; talks only to the configured Ollama server."""
+"""Local HTTP API + static UI. Binds to loopback; talks only to the configured local AI engine."""
+import atexit
 import base64
 import collections as pycollections
 import hashlib
@@ -18,11 +19,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from pydantic import BaseModel
 
-from daftar import APP_NAME, __version__, hardware
+from daftar import APP_NAME, __version__, hardware, llama_server
 from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
 from daftar.ingest import SUPPORTED, chunk_sections, clean_pdf_text, extract, page_image_png, scanned_pages, word_count
-from daftar.ollama import LOOPBACK, Ollama, check_url, prefixes
+from daftar.ollama import LOOPBACK, Ollama, OllamaError, check_url, prefixes
 from daftar.openai_compat import OpenAICompat, detect_servers
 from daftar.rag import Retriever, fit_prompt
 from daftar.store import Store
@@ -132,10 +133,43 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
     app.state.store, app.state.worker, app.state.settings = store, worker, settings
 
     def ollama():
-        """The model engine the user chose: Ollama, or any OpenAI-compatible server."""
+        """The model engine the user chose: Ollama, the built-in llama.cpp engine, or any OpenAI-compatible server."""
+        if settings["engine"] == "llama":
+            return llama()
         if settings["engine"] == "openai":
             return openai_factory(settings["openai_url"], settings["allow_remote_ollama"], settings["openai_key"])
         return ollama_factory(settings["ollama_url"], settings["allow_remote_ollama"])
+
+    llama_state = {"server": None, "key": None}
+
+    def llama():
+        """The built-in engine: llama-server as a child process, started on the first answer."""
+        explicit_binary = str(settings["llama_binary"]).strip()
+        explicit_model = str(settings["llama_model"]).strip()
+        for label, value in (("program", explicit_binary), ("model file", explicit_model)):
+            if value and not Path(value).expanduser().is_file():
+                raise OllamaError(f"The chosen llama.cpp {label} was not found: {value}")
+        binaries = llama_server.find_binaries(explicit_binary)
+        models = llama_server.find_models(explicit_model)
+        if not binaries:
+            raise OllamaError("No llama.cpp program was found. Put llama-server in ~/models/llama.cpp, "
+                              "or choose it in Settings → AI engine.")
+        if not models:
+            raise OllamaError("No .gguf model file was found. Download one, or choose it in Settings → AI engine.")
+        key = (str(binaries[0]), str(models[0]))
+        if llama_state["key"] != key:
+            if llama_state["server"]:
+                llama_state["server"].stop()
+            llama_state["server"] = llama_server.LlamaServer(binaries, models[0], home)
+            llama_state["key"] = key
+        return llama_server.LlamaClient(llama_state["server"])
+
+    def stop_llama():
+        if llama_state["server"]:
+            llama_state["server"].stop()
+
+    app.router.on_shutdown.append(stop_llama)
+    atexit.register(stop_llama)
 
     def file_path(doc: dict) -> Path:
         return files_dir / f"{doc['id']}{doc['ext']}"
@@ -229,8 +263,10 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
             size, overlap = settings["chunk_size"], settings["chunk_overlap"]
             chunks = chunk_sections(pages, size, overlap)
             if not chunks:
-                raise ValueError("No text found. This looks like a scanned document or image: install an OCR model "
-                                 "(Settings → Reading scanned pages) and re-index it.")
+                raise ValueError("No text found. This looks like a scanned document or image: "
+                                 + ("the built-in engine cannot read scans yet; choose Ollama with a vision model "
+                                    "to read them." if settings["engine"] == "llama" else
+                                    "install an OCR model (Settings → Reading scanned pages) and re-index it."))
             ids = store.replace_chunks(entry_id, chunks)
             embed_model = None
             try:
@@ -364,6 +400,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         ram = hw.get("ram_gb")
         vram = (hw.get("gpu") or {}).get("vram_gb")
         ollama_engine = settings["engine"] == "ollama"
+        llama_engine = settings["engine"] == "llama"
         old_engine = False
         if ollama_engine:
             try:
@@ -375,26 +412,37 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         if old_engine or fitness["level"] == "too_big":
             name, size = "gemma3:1b", 0.8
             fitness = hardware.fit(size, ram, vram)
-        engine_detail = (f"Connected to {settings['openai_url']}" if ready and not ollama_engine
-                         else f"Ollama {version} is running" if ready and version
-                         else "Ollama is running" if ready
-                         else f"No AI engine answered at {settings['ollama_url'] if ollama_engine else settings['openai_url']}. "
-                              "Start it, then Refresh.")
+        if llama_engine:
+            engine_detail = ("Built-in llama.cpp is ready and starts when you ask a question" if ready
+                             else f"The built-in engine is not ready: {error}")
+        elif ready and not ollama_engine:
+            engine_detail = f"Connected to {settings['openai_url']}"
+        elif ready:
+            engine_detail = f"Ollama {version} is running" if version else "Ollama is running"
+        else:
+            engine_detail = (f"No AI engine answered at {settings['ollama_url']}. Start it, then Refresh." if ollama_engine
+                             else f"No AI engine answered at {settings['openai_url']}. Start it, then Refresh.")
         if error:
             log.debug("setup: engine unreachable: %s", error)
         steps = [
             {"key": "engine", "title": "AI engine", "done": ready, "optional": False,
              "detail": engine_detail},
             {"key": "chat", "title": "Chat model", "done": chat is not None, "optional": False,
-             "detail": chat or (f"Download {name} ({size:g} GB), or pick a model you already have in Settings."
+             "detail": chat or (f"Choose a .gguf chat model in Settings → AI engine."
+                                if llama_engine else
+                                f"Download {name} ({size:g} GB), or pick a model you already have in Settings."
                                 if ready else f"Available once the AI engine is running ({name}, {size:g} GB)."),
              "download": name if ollama_engine and ready and chat is None else None, "fit": fitness},
             {"key": "search", "title": "Search model", "done": embed is not None, "optional": True,
-             "detail": embed or ("Adds meaning-based search. Without it, Daftar still finds exact words."
+             "detail": embed or ("Not available with the built-in engine yet: search finds exact words."
+                                 if llama_engine else
+                                 "Adds meaning-based search. Without it, Daftar still finds exact words."
                                  if ready else "Available once the AI engine is running."),
              "download": "qwen3-embedding:0.6b" if ollama_engine and ready and embed is None else None},
             {"key": "ocr", "title": "Scanned pages", "done": ocr is not None, "optional": True,
-             "detail": ocr or "Optional: choose a vision model in Settings to read scans and photos."},
+             "detail": ocr or ("Needs Ollama and a vision model; the built-in engine cannot read scans yet."
+                               if llama_engine else
+                               "Optional: choose a vision model in Settings to read scans and photos.")},
         ]
         return {"hardware": hw, "engine": settings["engine"], "engine_ready": ready,
                 "engine_version": version, "chat_model": chat, "embed_ready": embed is not None,
@@ -410,6 +458,8 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
             models = installed_models(client)
         except Exception as e:
             log.warning("setup test: engine unreachable: %s", e)
+            if settings["engine"] == "llama":
+                return {"ok": False, "error": f"The built-in engine is not ready: {e}"}
             return {"ok": False, "error": f"No AI engine answered at {engine_url}. Start it, then try again."}
         model = resolve_chat_model(models, client)
         if not model:
@@ -439,9 +489,13 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
                     check_url(settings[key], False)
                 except ValueError:
                     changes[key] = local  # turning remote off snaps back to this computer
-        if any(k in changes for k in ("engine", "ollama_url", "openai_url", "openai_key")):
+        if any(k in changes for k in ("engine", "ollama_url", "openai_url", "openai_key", "llama_binary", "llama_model")):
             meta_cache.clear()
             embed_cache.update(at=0.0)
+        if any(k in changes for k in ("engine", "llama_binary", "llama_model")):
+            if llama_state["server"]:
+                llama_state["server"].stop()
+            llama_state.update(server=None, key=None)
         log.info("settings changed: %s", ", ".join(sorted(changes)))
         return settings.update(changes)
 
@@ -455,7 +509,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
         try:
             return ollama().model_list()
         except Exception as e:
-            raise HTTPException(503, f"Ollama is not reachable: {e}")
+            raise HTTPException(503, f"The AI engine is not available: {e}")
 
     @app.post("/api/models/pull")
     def pull_model(body: PullIn):
@@ -477,6 +531,22 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
     def detect_engines():
         """Local AI servers answering on their usual addresses (Ollama, LM Studio, Jan, llama.cpp, vLLM...)."""
         return detect_servers()
+
+    @app.get("/api/llama")
+    def llama_files():
+        """llama.cpp programs and .gguf model files found on this computer (shown in Settings)."""
+        root = str(Path.home())
+        short = lambda path: "~" + str(path)[len(root):] if str(path).startswith(root) else str(path)
+        binaries = llama_server.find_binaries(settings["llama_binary"])
+        models = llama_server.find_models(settings["llama_model"])
+        return {
+            "binaries": [{"path": str(p), "label": short(p)} for p in binaries],
+            "models": [{"path": str(p), "label": f"{p.stem} · {p.stat().st_size / 1e9:.1f} GB"} for p in models],
+            "auto_binary": str(binaries[0]) if binaries else "",
+            "auto_model": str(models[0]) if models else "",
+            "running": bool(llama_state["server"] and llama_state["server"].running()),
+            "log": str(llama_state["server"].log_path) if llama_state["server"] else "",
+        }
 
     @app.get("/api/logs")
     def logs():

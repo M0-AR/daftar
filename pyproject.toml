@@ -33,6 +33,6 @@ include = ["daftar*"]
 daftar = ["static/*"]
 
 [tool.pytest.ini_options]
-markers = ["live: needs a running local Ollama with an installed chat model"]
+markers = ["live: needs the built-in llama.cpp engine or a running local Ollama"]
 addopts = "-m 'not live'"
 filterwarnings = ["ignore::DeprecationWarning:fastapi.testclient", "ignore:Using `httpx`"]

@@ -217,12 +217,15 @@ async function refreshStatus() {
   const s = state.status, pill = $("#statusPill");
   if (s.settings.theme) applyTheme(s.settings.theme);
   const strip = (m) => (m || "").replace(/:latest$/, "");
-  if (!s.ollama) pill.innerHTML = `<span class="dot err"></span><span>Ollama not running</span>`;
+  const engine = (s.settings || {}).engine || "ollama";
+  const engineName = engine === "llama" ? "Built-in engine" : engine === "openai" ? "AI app" : "Ollama";
+  if (!s.ollama) pill.innerHTML = `<span class="dot err"></span><span>${engineName} not ready</span>`;
   else if (!s.chat_model) pill.innerHTML = `<span class="dot warn"></span><span>No chat model</span>`;
-  else if (strip(s.chat_model) !== strip(s.settings.chat_model)) pill.innerHTML = `<span class="dot warn"></span><span>${esc(s.chat_model)} (fallback)</span>`;
+  else if (engine !== "llama" && strip(s.chat_model) !== strip(s.settings.chat_model)) pill.innerHTML = `<span class="dot warn"></span><span>${esc(s.chat_model)} (fallback)</span>`;
   else pill.innerHTML = `<span class="dot ok"></span><span>${esc(s.chat_model)}</span>`;
-  if (s.ollama && s.compute === "cpu") pill.innerHTML = pill.innerHTML.replace('dot ok', 'dot warn').replace("</span>" + esc(s.chat_model), "</span>" + esc(s.chat_model) + " · CPU only");
-  pill.title = s.ollama ? `Ollama ${s.ollama_version} · ${s.embed_ready ? "semantic + keyword search" : "keyword search only"}` : (s.error || "");
+  if (engine === "ollama" && s.ollama && s.compute === "cpu") pill.innerHTML = pill.innerHTML.replace('dot ok', 'dot warn').replace("</span>" + esc(s.chat_model), "</span>" + esc(s.chat_model) + " · CPU only");
+  const search = s.embed_ready ? "semantic + keyword search" : "keyword search only";
+  pill.title = s.ollama ? `${engine === "llama" ? "Built-in llama.cpp" : engine === "openai" ? "OpenAI-compatible engine" : `Ollama ${s.ollama_version}`} · ${search}` : (s.error || "");
   return s;
 }
 const band = (items) => `<div class="band">${items.map(([k, v]) => `<div><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("")}</div>`;
@@ -564,7 +567,8 @@ async function renderSearch(r) {
 async function renderSettings() {
   const s = await refreshStatus();
   const cfg = s.settings;
-  let models = []; try { models = await api("/models"); } catch { /* ollama down */ }
+  const ll = cfg.engine === "llama" ? await api("/llama").catch(() => null) : null;
+  let models = []; try { models = await api("/models"); } catch { /* engine down */ }
   const names = models.map((m) => m.name);
   const has = (n) => names.includes(n) || names.includes(n + ":latest");
   const opts = (list, cur) => [...new Set([cur, ...list])].map((n) => `<option value="${esc(n)}" ${n === cur ? "selected" : ""}>${esc(n)}${has(n) ? "" : " (not installed)"}</option>`).join("");
@@ -577,10 +581,15 @@ async function renderSettings() {
       <div class="actions"><button class="btn ghost" data-act="reset-settings">Reset to defaults</button></div></div>
     <div class="cols"><div>
       <div class="panel"><h2>AI model</h2>
-        <div class="pill" style="margin-bottom:14px">${s.ollama ? `<span class="dot ok"></span>${cfg.engine === "openai" ? "Connected to your OpenAI-compatible AI app" : `Ollama ${esc(s.ollama_version)} is running`}` : `<span class="dot err"></span>${cfg.engine === "openai" ? "Your AI app is not reachable at " + esc(cfg.openai_url) : "Ollama is not reachable"}`}</div>
-        ${s.compute === "cpu" ? `<p class="sub err-text" style="margin-top:-6px">Ollama is running models on the <b>processor only</b> (nothing in GPU memory), so answers and scanned-page reading are slow. If this computer has a graphics card, reinstall Ollama with its GPU libraries (see Help).</p>`
+        <div class="pill" style="margin-bottom:14px">${s.ollama ? `<span class="dot ok"></span>${cfg.engine === "openai" ? "Connected to your OpenAI-compatible AI app" : cfg.engine === "llama" ? "Built-in engine is ready" : `Ollama ${esc(s.ollama_version)} is running`}` : `<span class="dot err"></span>${cfg.engine === "openai" ? "Your AI app is not reachable at " + esc(cfg.openai_url) : cfg.engine === "llama" ? "Built-in engine needs a program and model file (see AI engine below)" : "Ollama is not reachable"}`}</div>
+        ${cfg.engine === "ollama" && s.compute === "cpu" ? `<p class="sub err-text" style="margin-top:-6px">Ollama is running models on the <b>processor only</b> (nothing in GPU memory), so answers and scanned-page reading are slow. If this computer has a graphics card, reinstall Ollama with its GPU libraries (see Help).</p>`
           : s.compute === "partial" ? `<p class="sub" style="margin-top:-6px">The model only partly fits in GPU memory; a smaller model or shorter context will be faster.</p>` : ""}
-        <div class="field"><label>Chat model</label><select data-setting="chat_model">${opts(chatModels, cfg.chat_model)}</select>
+        ${cfg.engine === "llama" ? `
+        <div class="field"><label>Chat model</label><div class="pill" style="margin:0">${s.chat_model ? `<span class="dot ok"></span>${esc(s.chat_model)}` : `<span class="dot err"></span>No model file found`}</div>
+          <span class="hint">The .gguf file chosen under <b>AI engine</b>. Daftar answers with it.</span></div>
+        <div class="field"><label>Search model (embeddings)</label>
+          <span class="hint">Not available with the built-in engine yet: search matches exact words, which still finds names, dates and amounts. Ollama adds meaning-based search.</span></div>`
+        : `<div class="field"><label>Chat model</label><select data-setting="chat_model">${opts(chatModels, cfg.chat_model)}</select>
           <span class="hint">${s.chat_model && !has(cfg.chat_model) ? `Not installed, so Daftar is answering with <b>${esc(s.chat_model)}</b>. ` : ""}Larger models answer better but need more memory.</span></div>
         <div class="field"><label>Search model (embeddings)</label><select data-setting="embed_model">${opts(embedModels, cfg.embed_model)}</select>
           <span class="hint">${!s.embed_ready ? "No search model installed: search matches words only, not meaning."
@@ -588,7 +597,7 @@ async function renderSettings() {
         <div class="field"><label>Download a model</label><div class="row"><input type="text" id="pullName" placeholder="e.g. qwen3.5:2b or nomic-embed-text" style="flex:1">
           <button class="btn" data-act="pull" ${cfg.engine === "openai" ? "disabled title=\"Download models in your AI app, then pick them here\"" : ""}>Download</button></div>
           <span class="hint">This is the one action that uses the internet: Ollama fetches the model from its library. Your documents are never sent.</span>
-          <div class="progress" id="pullProgress" hidden><div class="row" style="justify-content:space-between"><span class="sub" id="pullStatus"></span><span class="sub" id="pullPct"></span></div><div class="meter"><i id="pullBar" style="width:0"></i></div></div></div>
+          <div class="progress" id="pullProgress" hidden><div class="row" style="justify-content:space-between"><span class="sub" id="pullStatus"></span><span class="sub" id="pullPct"></span></div><div class="meter"><i id="pullBar" style="width:0"></i></div></div></div>`}
         ${models.length ? `<div class="models">${models.map((m) => `<div><span>${esc(m.name)}</span><span>${esc(m.parameters)} ${m.size ? fmtBytes(m.size) : ""}</span></div>`).join("")}</div>` : ""}
       </div>
       <div class="panel"><h2>Answers</h2>
@@ -602,26 +611,37 @@ async function renderSettings() {
       </div></div>
     <div>
       <div class="panel"><h2>Reading documents</h2>
-        <div class="field"><label>Reading scanned pages (OCR model)</label><select data-setting="ocr_model">${opts(s.vision_models || [], cfg.ocr_model)}</select>
+        ${cfg.engine === "llama" ? `<div class="field"><label>Reading scanned pages (OCR model)</label>
+          <span class="hint">Not available with the built-in engine yet: scanned PDF pages and photos need Ollama and a vision model.</span></div>`
+        : `<div class="field"><label>Reading scanned pages (OCR model)</label><select data-setting="ocr_model">${opts(s.vision_models || [], cfg.ocr_model)}</select>
           <span class="hint">${s.ocr_active ? (s.ocr_active.replace(/:latest$/, "") === cfg.ocr_model.replace(/:latest$/, "") ? "Scanned PDF pages and photos are read with this model." : `Not installed, so Daftar uses <b>${esc(s.ocr_active)}</b>.`)
-            : "No vision model installed: scanned PDF pages and photos cannot be read yet. PaddleOCR-VL is small and strong for Arabic and English."}</span></div>
+            : "No vision model installed: scanned PDF pages and photos cannot be read yet. PaddleOCR-VL is small and strong for Arabic and English."}</span></div>`}
         ${num("chunk_size", "Text block size", "Characters per passage (200–4000). Smaller blocks give more precise sources.", 200, 4000, 50)}
         ${num("chunk_overlap", "Text block overlap", "Characters shared between neighbouring blocks, so sentences are not cut off.", 0, 1000, 10)}
         ${s.stale_entries ? `<p class="sub">${plural(s.stale_entries, "document index")} use older settings or no search model.</p><button class="btn" data-act="reindex-all">Re-index now</button>` : '<p class="hint">All documents use the current settings.</p>'}
       </div>
       <div class="panel"><h2>AI engine</h2>
         <div class="field"><label>Run the models with</label><select data-setting="engine">
-          <option value="ollama" ${cfg.engine !== "openai" ? "selected" : ""}>Ollama</option>
+          <option value="ollama" ${cfg.engine === "ollama" ? "selected" : ""}>Ollama</option>
+          <option value="llama" ${cfg.engine === "llama" ? "selected" : ""}>Built-in engine (llama.cpp) — no other app needed</option>
           <option value="openai" ${cfg.engine === "openai" ? "selected" : ""}>Another app (OpenAI-compatible): LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp…</option></select>
-          <span class="hint">Use whichever local AI app you already have. Your documents stay on this computer either way.</span></div>
-        ${cfg.engine === "openai" ? `
+          <span class="hint">${cfg.engine === "llama" ? "Daftar runs the model itself, using the files below. It starts only when you ask a question." : "Use whichever local AI app you already have. Your documents stay on this computer either way."}</span></div>
+        ${cfg.engine === "llama" ? `
+        <div class="field"><label>llama.cpp program</label><input type="text" data-setting="llama_binary" value="${esc(cfg.llama_binary)}" placeholder="${esc((ll && ll.auto_binary) || "No llama-server found")}">
+          <datalist id="llamaBins">${((ll && ll.binaries) || []).map((b) => `<option value="${esc(b.path)}">${esc(b.label)}</option>`).join("")}</datalist>
+          <span class="hint">${cfg.llama_binary && !(ll && ll.binaries.some((b) => b.path === cfg.llama_binary)) ? "That program was not found. " : ""}${ll && ll.binaries.length ? "Leave empty to use the detected program; Daftar starts and stops it for you." : "Put llama-server in ~/models/llama.cpp, or paste its path here."}</span></div>
+        <div class="field"><label>Model file (.gguf)</label><input type="text" data-setting="llama_model" value="${esc(cfg.llama_model)}" placeholder="${esc((ll && ll.auto_model) || "No .gguf file found")}">
+          <datalist id="llamaModels">${((ll && ll.models) || []).map((m) => `<option value="${esc(m.path)}">${esc(m.label)}</option>`).join("")}</datalist>
+          <span class="hint">${cfg.llama_model && !(ll && ll.models.some((m) => m.path === cfg.llama_model)) ? "That model file was not found. " : ""}A chat model such as Qwen3.5-2B (about 1.2 GB). Leave empty to use the detected file.</span></div>
+        <p class="hint">Uses your graphics card when the program supports it, otherwise the processor. Meaning-based search and scanned-page reading need Ollama for now.</p>`
+        : cfg.engine === "openai" ? `
         <div class="field"><label>Server address</label><input type="text" data-setting="openai_url" value="${esc(cfg.openai_url)}">
           <span class="hint">LM Studio :1234, Jan :1337, llama.cpp :8080, vLLM :8000, KoboldCpp :5001. The context window is set in that app.</span></div>
         <div class="field"><label>API key <span class="hint">(only if your server requires one)</span></label><input type="text" data-setting="openai_key" value="${esc(cfg.openai_key)}" autocomplete="off"></div>`
         : `<div class="field"><label>Ollama server address</label><input type="text" data-setting="ollama_url" value="${esc(cfg.ollama_url)}"></div>`}
         <div class="row" style="margin-bottom:12px"><button class="btn small" data-act="detect">Find AI apps running on this computer</button></div>
         <div id="detected"></div>
-        ${sw("allow_remote_ollama", "Allow a server on another computer", "Only for a server you control. Your documents and questions will be sent to it.")}
+        ${cfg.engine === "llama" ? "" : sw("allow_remote_ollama", "Allow a server on another computer", "Only for a server you control. Your documents and questions will be sent to it.")}
       </div>
       <div class="panel"><h2>Appearance &amp; advanced</h2>
         <label class="switch"><input type="checkbox" id="darkMode" ${cfg.theme !== "light" ? "checked" : ""}><span><b>Dark mode</b></span></label>
@@ -641,7 +661,7 @@ async function renderSettings() {
       try {
         await api("/settings", { method: "PUT", body: { [key]: value } });
         toast("Saved");
-        if (["chunk_size", "chunk_overlap", "embed_model", "chat_model", "debug", "allow_remote_ollama", "ollama_url", "engine", "openai_url", "openai_key", "ocr_model"].includes(key)) render();
+        if (["chunk_size", "chunk_overlap", "embed_model", "chat_model", "debug", "allow_remote_ollama", "ollama_url", "engine", "openai_url", "openai_key", "ocr_model", "llama_binary", "llama_model"].includes(key)) render();
         else refreshStatus();
       } catch (err) { fail(err); render(); }
     };

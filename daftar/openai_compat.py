@@ -73,9 +73,9 @@ class OpenAICompat:
         return [d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))]
 
     def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192,
-             think: bool = False):
+             think: bool = False, extra: dict | None = None):
         """Stream answer text (server-sent events). The context window and reasoning are set in the server app itself."""
-        body = {"model": model, "messages": messages, "temperature": temperature, "stream": True}
+        body = {"model": model, "messages": messages, "temperature": temperature, "stream": True, **(extra or {})}
         with self.http.stream("POST", "/chat/completions", json=body) as r:
             if r.status_code != 200:
                 raise OllamaError(_error_text(r.read().decode()))

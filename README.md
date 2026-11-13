@@ -4,7 +4,7 @@ Private document chat that runs entirely on your computer.
 
 Put contracts, reports and notes into collections, ask questions in plain language, and get answers
 that cite the exact passages they came from, with a match score. Everything (files, indexes, chats)
-stays in a local data folder; the app only talks to your local [Ollama].
+stays in a local data folder; the app only talks to a local AI engine (built-in [llama.cpp], or [Ollama]).
 
 ## Features
 - **Collections**: separate knowledge bases; one file can be in several, each with its own index.
@@ -23,8 +23,10 @@ stays in a local data folder; the app only talks to your local [Ollama].
 See [docs/GAP.md](docs/GAP.md) for the feature checklist this build was verified against.
 
 ## Run
-Requires Python 3.11+ and a local AI engine: Ollama, or any OpenAI-compatible app (LM Studio, Jan,
-llama.cpp's llama-server, vLLM, LocalAI, KoboldCpp). Pick it under Settings → AI engine.
+Requires Python 3.11+. Daftar can run its own [llama.cpp] engine: put `llama-server` and a `.gguf`
+chat model anywhere under `~/models` (for example `~/models/llama.cpp/...` and `~/models/qwen3.5-2b-gguf/`)
+and it finds them; Settings → AI engine also takes explicit paths. Ollama and other OpenAI-compatible
+apps (LM Studio, Jan, vLLM, LocalAI, KoboldCpp) remain supported and are picked in the same place.
 
 ```bash
 uv venv --system-site-packages .venv        # Linux: system GTK/WebKit for the native window
@@ -41,9 +43,14 @@ uv pip install -p .venv -e ".[desktop]"
 | Search (embeddings) | `qwen3-embedding:0.6b` | any installed embedding model, else keyword search (SQLite FTS5) |
 | Reading scans (OCR) | `paddleocr-vl:1.6` | any installed vision model, else scans are reported as unreadable |
 
-Reasoning models (Qwen3.5) think before answering by default; Daftar turns that off for speed. Re-enable it in Settings → Answers → Let the model reason first. Qwen3.5 needs a recent Ollama (0.40+); if it is not installed, Daftar answers with the largest chat model you have. With no chat model at all, Chat shows a setup checklist sized to this computer's memory, with a one-click download and a smoke test.
+The built-in llama.cpp engine uses a `.gguf` chat model directly and needs no Ollama. It is chat-only
+for now: search uses exact words (FTS5, no embeddings) and scanned pages are reported as unreadable.
+The Ollama rows above apply when Ollama is the chosen engine.
 
-Install from Settings → Download a model, with `ollama pull <name>`, or from a GGUF you downloaded:
+Reasoning models (Qwen3.5) think before answering by default; Daftar turns that off for speed. Re-enable it in Settings → Answers → Let the model reason first. With Ollama, Qwen3.5 needs a recent version (0.40+); if it is not installed, Daftar answers with the largest chat model you have. With no chat model at all, Chat shows a setup checklist sized to this computer's memory, with a one-click download (Ollama) or a detected GGUF file, and a smoke test.
+
+With Ollama, install from Settings → Download a model or with `ollama pull <name>`; the built-in engine
+reads the `.gguf` file in place. To add a GGUF to Ollama:
 
 ```bash
 printf 'FROM ./Qwen3.5-2B-Q4_K_M.gguf\nRENDERER qwen3.5\nPARSER qwen3.5\n' > Modelfile && ollama create qwen3.5:2b -f Modelfile
@@ -66,8 +73,8 @@ Data folder: `~/.local/share/daftar` (Linux), `~/Library/Application Support/Daf
 ## Test
 ```bash
 uv pip install -p .venv -e ".[dev]"
-.venv/bin/python -m pytest          # offline suite with a fake Ollama
-.venv/bin/python -m pytest -m live  # end-to-end against the local Ollama
+.venv/bin/python -m pytest          # offline suite with a fake engine
+.venv/bin/python -m pytest -m live  # built-in llama.cpp smoke test + end-to-end against Ollama
 ```
 
 ## Build a standalone app
@@ -76,3 +83,4 @@ On each target OS: `python scripts/build.py` → `dist/Daftar/`, then `python sc
 and smoke-tests Windows, macOS and Linux on GitHub Actions.
 
 [Ollama]: https://ollama.com
+[llama.cpp]: https://github.com/ggml-org/llama.cpp

@@ -691,3 +691,28 @@ def test_ocr_models_are_never_used_for_chat(api, fake):
     status = api.c.get("/api/status").json()
     assert status["chat_model"] == "tiny-chat:latest" and "paddleocr-vl:1.6" not in status["chat_models"]
     assert status["ocr_active"] == "paddleocr-vl:1.6"
+
+
+# --- built-in llama.cpp engine ------------------------------------------------------------
+def test_builtin_engine_reports_missing_files_clearly(api):
+    r = api.c.put("/api/settings", json={"engine": "llama", "llama_binary": "/nonexistent/llama-server",
+                                        "llama_model": "/nonexistent/model.gguf"})
+    assert r.status_code == 200
+
+    status = api.c.get("/api/status").json()
+    assert status["ollama"] is False and "program was not found" in status["error"]
+
+    setup = api.c.get("/api/setup").json()
+    assert setup["engine"] == "llama" and setup["engine_ready"] is False
+    assert "built-in engine is not ready" in setup["steps"][0]["detail"].lower()
+
+    test = api.c.post("/api/setup/test").json()
+    assert test["ok"] is False and "built-in engine is not ready" in test["error"].lower()
+
+
+def test_llama_file_endpoint_lists_programs_and_models(api):
+    data = api.c.get("/api/llama").json()
+    assert set(data) == {"binaries", "models", "auto_binary", "auto_model", "running", "log"}
+    assert all({"path", "label"} <= set(b) for b in data["binaries"])
+    assert all({"path", "label"} <= set(m) for m in data["models"])
+    assert data["running"] is False

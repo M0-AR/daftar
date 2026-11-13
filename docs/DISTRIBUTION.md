@@ -33,6 +33,17 @@ CUDA builds are faster on NVIDIA but cost 163 MB + 407 MB runtime per install; o
 backend from a table; probe it (`llama-server --list-devices`) and fall back to CPU if the GPU backend fails to load.
 Keep Ollama support as an "advanced: use my own Ollama/llama-server" option, as Jan does.
 
+**Built 2026-11-13 (Phase 1b).** `daftar/llama_server.py` starts `llama-server` on a loopback port,
+auto-discovers binaries under `~/models/llama.cpp/**` and models under `~/models/**` (explicit paths in
+Settings), tries the GPU build before CPU, waits for `/health` (180 s), and stops the child on exit.
+Status and setup read file metadata without loading the model (~0.02 s); the server starts on the first
+question. Verified on Linux with b12360 Vulkan (RTX 3090) and CPU builds: model load <1 s, smoke answer
+1.1 s end-to-end, keyword search and `[n]` citations work, process cleaned up after shutdown. Trap: a stale
+system llama.cpp (here `/opt/llama`) wins over the binary's RUNPATH and crashes it, so the launcher prepends
+its own directory to `LD_LIBRARY_PATH` (macOS `DYLD_LIBRARY_PATH`, Windows `PATH`). Win/Mac launching is
+implemented but untested. Embeddings/OCR for this engine are not wired yet (keyword-only search; scans are
+reported unreadable), and the nightly build is not pinned for distribution yet.
+
 ## 2. Models: download on first run, sized to the machine, commercially licensed
 
 - **Licences for a paid product.** Qwen3 / Qwen3.5 / Qwen3-Embedding and PaddleOCR-VL are Apache 2.0; Gemma 4 is
@@ -83,7 +94,7 @@ using the processor. Update the driver to make it about 10x faster").
 |---|---|---|---|
 | 0 | CPU warning, model fallbacks, `--self-test`, CI matrix, smoke test | yes | done (51c9b05) |
 | 1a | Engine choice: Ollama or any OpenAI-compatible app (LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp) with detection | yes | done |
-| 1b | Bundled `llama-server` (Vulkan/Metal/CPU) started by Daftar itself, using the 1a connector; probe + fallback | Linux yes; Win/Mac via CI | proposed |
+| 1b | Bundled `llama-server` (Vulkan/Metal/CPU) started by Daftar itself, using the 1a connector; probe + fallback | Linux yes (b12360 Vulkan+CPU); Win/Mac untested | done on Linux |
 | 2 | First-run wizard: hardware detection, fitted model download/import, smoke test | yes | done (setup card, `/api/setup`, smoke test) |
 | 3 | Reranking with llama-server `/v1/rerank`, kept only if `eval_answers.py` improves | yes | proposed |
 | 4 | Installers: Inno Setup (+WebView2 check), notarized DMG, AppImage/.deb; signing in CI | needs accounts | needs decision |
