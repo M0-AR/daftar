@@ -84,7 +84,7 @@ using the processor. Update the driver to make it about 10x faster").
 | 0 | CPU warning, model fallbacks, `--self-test`, CI matrix, smoke test | yes | done (51c9b05) |
 | 1a | Engine choice: Ollama or any OpenAI-compatible app (LM Studio, Jan, llama.cpp, vLLM, LocalAI, KoboldCpp) with detection | yes | done |
 | 1b | Bundled `llama-server` (Vulkan/Metal/CPU) started by Daftar itself, using the 1a connector; probe + fallback | Linux yes; Win/Mac via CI | proposed |
-| 2 | First-run wizard: hardware detection, fitted model download/import, smoke test | yes | proposed |
+| 2 | First-run wizard: hardware detection, fitted model download/import, smoke test | yes | done (setup card, `/api/setup`, smoke test) |
 | 3 | Reranking with llama-server `/v1/rerank`, kept only if `eval_answers.py` improves | yes | proposed |
 | 4 | Installers: Inno Setup (+WebView2 check), notarized DMG, AppImage/.deb; signing in CI | needs accounts | needs decision |
 | 5 | Auto-update with tufup | yes | proposed |

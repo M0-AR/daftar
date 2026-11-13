@@ -226,6 +226,73 @@ def test_thinking_is_off_by_default(api, fake):
     assert fake.calls[-1]["think"] is True
 
 
+def _setup_hw(monkeypatch, ram=8.0, vram=None):
+    import daftar.server as server
+    monkeypatch.setattr(server.hardware, "summary", lambda: {
+        "ram_gb": ram, "cpu_count": 4,
+        "gpu": {"kind": "nvidia" if vram else "none", "name": "Test GPU" if vram else None, "vram_gb": vram},
+        "platform": "linux"})
+
+
+def test_setup_recommends_the_measured_model(api, fake, monkeypatch):
+    _setup_hw(monkeypatch)
+    fake.models_installed = []
+    d = api.c.get("/api/setup").json()
+    assert d["engine_ready"] and d["chat_model"] is None
+    assert d["recommended"]["chat"] == "qwen3.5:2b"
+    assert d["recommended"]["fit"]["level"] == "cpu"
+    chat = next(s for s in d["steps"] if s["key"] == "chat")
+    assert chat["download"] == "qwen3.5:2b" and chat["done"] is False
+
+
+def test_setup_uses_the_gpu_when_it_fits(api, fake, monkeypatch):
+    _setup_hw(monkeypatch, ram=32.0, vram=24.0)
+    fake.models_installed = []
+    d = api.c.get("/api/setup").json()
+    assert d["recommended"]["fit"]["level"] == "gpu"
+
+
+def test_setup_downsizes_when_memory_is_very_small(api, fake, monkeypatch):
+    _setup_hw(monkeypatch, ram=2.0)
+    fake.models_installed = []
+    d = api.c.get("/api/setup").json()
+    assert d["recommended"]["chat"] == "gemma3:1b"
+    assert d["recommended"]["fit"]["level"] == "tight"
+
+
+def test_setup_respects_an_old_engine(api, fake, monkeypatch):
+    _setup_hw(monkeypatch)
+    fake.version = lambda self: "0.23.2"
+    fake.models_installed = []
+    d = api.c.get("/api/setup").json()
+    assert d["older_engine"] is True and d["recommended"]["chat"] == "gemma3:1b"
+
+
+def test_setup_survives_an_engine_that_is_down(api, fake, monkeypatch):
+    _setup_hw(monkeypatch)
+    fake.model_list = lambda self: (_ for _ in ()).throw(RuntimeError("connection refused"))
+    d = api.c.get("/api/setup").json()
+    assert d["engine_ready"] is False and d["steps"][0]["done"] is False
+
+
+def test_setup_smoke_test_answers_with_the_chat_model(api, fake):
+    d = api.c.post("/api/setup/test").json()
+    assert d["ok"] is True and d["model"] == "fake-chat:latest" and "ms" in d
+    assert fake.calls[-1]["think"] is False
+
+
+def test_setup_smoke_test_reports_a_missing_chat_model(api, fake):
+    fake.models_installed = ["nomic-embed-text:latest"]
+    d = api.c.post("/api/setup/test").json()
+    assert d["ok"] is False and "chat model" in d["error"].lower()
+
+
+def test_setup_smoke_test_reports_an_unreachable_engine(api, fake):
+    fake.model_list = lambda self: (_ for _ in ()).throw(RuntimeError("connection refused"))
+    d = api.c.post("/api/setup/test").json()
+    assert d["ok"] is False and "No AI engine answered" in d["error"]
+
+
 def test_passages_to_use_limits_sources(api):
     cid = api.collection()
     api.upload(cid, TXT)

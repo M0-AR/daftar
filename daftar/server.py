@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import iterate_in_threadpool, run_in_threadpool
 from pydantic import BaseModel
 
-from daftar import APP_NAME, __version__
+from daftar import APP_NAME, __version__, hardware
 from daftar.config import Settings, data_dir
 from daftar.exporter import FORMATS, export
 from daftar.ingest import SUPPORTED, chunk_sections, clean_pdf_text, extract, page_image_png, scanned_pages, word_count
@@ -340,6 +340,89 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
             info["error"] = str(e)
         info["stale_entries"] = sum(1 for e in store.all("SELECT * FROM entries WHERE status = 'ready'") if is_stale(e))
         return info
+
+    @app.get("/api/setup")
+    def setup():
+        """First-run checklist: what is ready, what to download, and whether it fits this computer."""
+        hw = hardware.summary()
+        client, models, error, ready = None, [], None, False
+        try:
+            client = ollama()
+            models = installed_models(client)
+            ready = True
+        except Exception as e:
+            error = str(e)
+        version = None
+        if client is not None:
+            try:
+                version = client.version()
+            except Exception:
+                pass
+        chat = resolve_chat_model(models, client) if client else None
+        embed = resolve_embed_model(client, models) if client else None
+        ocr = resolve_ocr_model(client, models) if client else None
+        ram = hw.get("ram_gb")
+        vram = (hw.get("gpu") or {}).get("vram_gb")
+        ollama_engine = settings["engine"] == "ollama"
+        old_engine = False
+        if ollama_engine:
+            try:
+                old_engine = bool(version) and tuple(int(p) for p in version.split(".")[:2]) < (0, 40)
+            except ValueError:
+                pass
+        name, size = "qwen3.5:2b", 1.3
+        fitness = hardware.fit(size, ram, vram)
+        if old_engine or fitness["level"] == "too_big":
+            name, size = "gemma3:1b", 0.8
+            fitness = hardware.fit(size, ram, vram)
+        engine_detail = (f"Connected to {settings['openai_url']}" if ready and not ollama_engine
+                         else f"Ollama {version} is running" if ready and version
+                         else "Ollama is running" if ready
+                         else f"No AI engine answered at {settings['ollama_url'] if ollama_engine else settings['openai_url']}. "
+                              "Start it, then Refresh.")
+        if error:
+            log.debug("setup: engine unreachable: %s", error)
+        steps = [
+            {"key": "engine", "title": "AI engine", "done": ready, "optional": False,
+             "detail": engine_detail},
+            {"key": "chat", "title": "Chat model", "done": chat is not None, "optional": False,
+             "detail": chat or (f"Download {name} ({size:g} GB), or pick a model you already have in Settings."
+                                if ready else f"Available once the AI engine is running ({name}, {size:g} GB)."),
+             "download": name if ollama_engine and ready and chat is None else None, "fit": fitness},
+            {"key": "search", "title": "Search model", "done": embed is not None, "optional": True,
+             "detail": embed or ("Adds meaning-based search. Without it, Daftar still finds exact words."
+                                 if ready else "Available once the AI engine is running."),
+             "download": "qwen3-embedding:0.6b" if ollama_engine and ready and embed is None else None},
+            {"key": "ocr", "title": "Scanned pages", "done": ocr is not None, "optional": True,
+             "detail": ocr or "Optional: choose a vision model in Settings to read scans and photos."},
+        ]
+        return {"hardware": hw, "engine": settings["engine"], "engine_ready": ready,
+                "engine_version": version, "chat_model": chat, "embed_ready": embed is not None,
+                "ocr_ready": ocr is not None, "older_engine": old_engine,
+                "recommended": {"chat": name, "size_gb": size, "fit": fitness}, "steps": steps}
+
+    @app.post("/api/setup/test")
+    def setup_test():
+        """One tiny answer through the configured engine, so a broken install is caught now."""
+        engine_url = settings["ollama_url"] if settings["engine"] == "ollama" else settings["openai_url"]
+        try:
+            client = ollama()
+            models = installed_models(client)
+        except Exception as e:
+            log.warning("setup test: engine unreachable: %s", e)
+            return {"ok": False, "error": f"No AI engine answered at {engine_url}. Start it, then try again."}
+        model = resolve_chat_model(models, client)
+        if not model:
+            return {"ok": False, "error": "No chat model is installed yet."}
+        try:
+            started = time.perf_counter()
+            answer = "".join(client.chat(model, [{"role": "user", "content": "Reply with the single word: OK"}],
+                                         0.0, 1024, think=False)).strip()
+            return {"ok": True, "model": model, "answer": answer[:200],
+                    "ms": round((time.perf_counter() - started) * 1000)}
+        except Exception as e:
+            log.warning("setup test failed: %s", e)
+            return {"ok": False, "error": f"The engine could not answer: {e}"}
 
     @app.put("/api/settings")
     def put_settings(changes: dict):

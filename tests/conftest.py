@@ -103,7 +103,7 @@ class Api:
         return [json.loads(line) for line in r.text.splitlines() if line]
 
 
-_ORIGINAL = {name: FakeOllama.__dict__[name] for name in ("show", "model_list", "chat", "embed", "pull", "vision", "running")}
+_ORIGINAL = {name: FakeOllama.__dict__[name] for name in ("version", "show", "model_list", "chat", "embed", "pull", "vision", "running")}
 
 
 @pytest.fixture

@@ -41,7 +41,7 @@ uv pip install -p .venv -e ".[desktop]"
 | Search (embeddings) | `qwen3-embedding:0.6b` | any installed embedding model, else keyword search (SQLite FTS5) |
 | Reading scans (OCR) | `paddleocr-vl:1.6` | any installed vision model, else scans are reported as unreadable |
 
-Reasoning models (Qwen3.5) think before answering by default; Daftar turns that off for speed. Re-enable it in Settings → Answers → Let the model reason first. Qwen3.5 needs a recent Ollama (0.40+); if it is not installed, Daftar answers with the largest chat model you have.
+Reasoning models (Qwen3.5) think before answering by default; Daftar turns that off for speed. Re-enable it in Settings → Answers → Let the model reason first. Qwen3.5 needs a recent Ollama (0.40+); if it is not installed, Daftar answers with the largest chat model you have. With no chat model at all, Chat shows a setup checklist sized to this computer's memory, with a one-click download and a smoke test.
 
 Install from Settings → Download a model, with `ollama pull <name>`, or from a GGUF you downloaded:
 

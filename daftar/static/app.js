@@ -417,14 +417,16 @@ async function renderChat(r) {
     cols.map((c) => `<option value="${c.id}" ${c.id === selected ? "selected" : ""}>${esc(c.name)} · ${plural(c.documents, "document")}</option>`).join("");
   const msgs = chat ? chat.messages : [];
   const lastAssistant = [...msgs].reverse().find((m) => m.role === "assistant");
+  const setup = !status.chat_model ? await api("/setup").catch(() => null) : null;
+  const canAsk = cols.length > 0 && !!status.chat_model;
   main.innerHTML = `<div class="chat">
     <div class="chat-head"><div class="chat-title">
         <button ${chat ? `data-act="rename-chat" data-id="${chat.id}" title="Rename chat"` : ""}>${esc(chat ? chat.title : "New chat")}</button>
         ${cols.length ? `<select id="chatCol" title="Collection this chat searches">${chat && !chat.collection_id && !chat.all_collections ? '<option value="">Pick a collection…</option>' : ""}${options}</select>` : ""}</div>
       <span class="badge" title="Model answering in this chat">${esc(status.chat_model || "no model")}</span></div>
-    <div class="msgs" id="msgs">${msgs.length ? msgs.map((m, i) => msgHTML(m, { last: m === lastAssistant, question: questionFor(msgs, i) })).join("") : heroHTML(cols)}</div>
-    <div class="composer"><form id="askForm"><textarea id="q" rows="1" placeholder="${cols.length ? "Ask anything about your documents…" : "Create a collection first"}" ${cols.length ? "" : "disabled"}></textarea>
-      <button type="submit" class="btn primary" id="sendBtn" ${cols.length ? "" : "disabled"}>Send</button></form>
+    <div class="msgs" id="msgs">${msgs.length ? msgs.map((m, i) => msgHTML(m, { last: m === lastAssistant, question: questionFor(msgs, i) })).join("") : setup ? setupHTML(setup) : heroHTML(cols)}</div>
+    <div class="composer"><form id="askForm"><textarea id="q" rows="1" placeholder="${canAsk ? "Ask anything about your documents…" : status.chat_model ? "Create a collection first" : "Set up a chat model first"}" ${canAsk ? "" : "disabled"}></textarea>
+      <button type="submit" class="btn primary" id="sendBtn" ${canAsk ? "" : "disabled"}>Send</button></form>
       <div class="note">Press <kbd>Enter</kbd> to send, <kbd>Shift</kbd> + <kbd>Enter</kbd> for a new line. Answers are generated on this computer; check the sources for anything important.</div></div>
   </div>`;
   state.chat = chat;
@@ -441,6 +443,7 @@ async function renderChat(r) {
   };
   $("#askForm").onsubmit = async (e) => {
     e.preventDefault();
+    if (!canAsk) return;
     if (state.streaming) { state.streaming.abort(); return; }
     const question = q.value.trim();
     if (!question) return;
@@ -465,6 +468,27 @@ function heroHTML(cols) {
   return `<div class="hero"><img src="logo.svg" alt=""><h2>Ask your documents</h2>
     <p>Every answer lists the passages it used, with a match score, so you can check it.</p>
     <div class="suggest">${ideas.map((i) => `<button class="btn small" data-act="suggest">${esc(i)}</button>`).join("")}</div></div>`;
+}
+function setupHTML(s) {
+  const hw = s.hardware || {}, gpu = hw.gpu || {};
+  const facts = [hw.ram_gb ? `${hw.ram_gb} GB memory` : null, hw.cpu_count ? `${hw.cpu_count} CPU cores` : null,
+    gpu.vram_gb ? `${gpu.name} (${gpu.vram_gb} GB, graphics)` : null].filter(Boolean).map(esc).join(" · ");
+  const steps = (s.steps || []).map((st) => `<div class="setup-step">
+      <span class="dot ${st.done ? "ok" : st.optional ? "warn" : "err"}"></span>
+      <div class="setup-step-body"><b>${esc(st.title)}</b> <span class="sub">${esc(st.detail || "")}</span>
+        ${st.fit ? `<div class="hint">${esc(st.fit.label)} — ${esc(st.fit.note)}</div>` : ""}</div>
+      ${st.download ? `<button class="btn small" data-act="setup-pull" data-name="${esc(st.download)}">Download</button>` : ""}
+    </div>`).join("");
+  return `<div class="hero setup"><img src="logo.svg" alt=""><h2>Set up Daftar</h2>
+    <p>${facts ? facts : "Checking this computer…"}<br><span class="sub">Everything runs on this computer; only model downloads use the internet.</span></p>
+    <div class="panel" style="text-align:left;max-width:640px;width:100%;margin:0 auto">${steps}
+      ${s.older_engine ? '<p class="hint err-text">Your Ollama is older than 0.40. Update it to run Qwen3.5, or download the smaller model below.</p>' : ""}
+      <div class="progress" id="setupProgress" hidden><div class="row" style="justify-content:space-between"><span class="sub" id="setupPullStatus"></span><span class="sub" id="setupPullPct"></span></div><div class="meter"><i id="setupPullBar" style="width:0"></i></div></div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap"><button class="btn" data-act="setup-test">Test my setup</button>
+        ${s.engine_ready ? "" : '<button class="btn ghost" data-act="setup-refresh">Refresh</button>'}
+        <a class="btn ghost" href="#/settings">Settings</a></div>
+      <p class="hint" id="setupTest"></p>
+    </div></div>`;
 }
 function sourcesHTML(sources, question) {
   if (!sources || !sources.length) return "";
@@ -628,22 +652,37 @@ async function renderSettings() {
   if (cfg.debug) loadLogs();
 }
 async function loadLogs() { const el = $("#logs"); if (!el) return; const { lines } = await api("/logs"); el.textContent = lines.join("\n") || "(empty)"; el.scrollTop = el.scrollHeight; }
+async function pullStream(name, show) {
+  const r = await fetch("/api/models/pull", { method: "POST", headers: { "X-Daftar": "1", "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  let error = null;
+  await readStream(r, (ev) => {
+    if (ev.error) error = ev.error;
+    else show(ev.status, ev.total ? Math.round((100 * (ev.completed || 0)) / ev.total) : null);
+  });
+  if (error) throw new Error(error);
+}
 async function pullModel() {
   const name = $("#pullName").value.trim();
   if (!name) return toast("Type a model name first", true);
   $("#pullProgress").hidden = false;
   const show = (status, pct) => { $("#pullStatus").textContent = status; $("#pullPct").textContent = pct == null ? "" : pct + "%"; $("#pullBar").style.width = (pct || 0) + "%"; };
   show("Starting…", 0);
+  try { await pullStream(name, show); toast(`${name} is ready`); render(); }
+  catch (e) { show("Failed: " + e.message, 0); fail(e); }
+}
+async function setupPull(name) {
+  const progress = $("#setupProgress"), status = $("#setupPullStatus"), pct = $("#setupPullPct"), bar = $("#setupPullBar");
+  if (!progress) return;
+  progress.hidden = false;
+  const show = (text, p) => { status.textContent = text; pct.textContent = p == null ? "" : p + "%"; bar.style.width = (p || 0) + "%"; };
+  show("Starting…", 0);
   try {
-    const r = await fetch("/api/models/pull", { method: "POST", headers: { "X-Daftar": "1", "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
-    let error = null;
-    await readStream(r, (ev) => {
-      if (ev.error) error = ev.error;
-      else show(ev.status, ev.total ? Math.round((100 * (ev.completed || 0)) / ev.total) : null);
-    });
-    if (error) throw new Error(error);
-    toast(`${name} is ready`); render();
+    await pullStream(name, show);
+    toast(`${name} is ready`);
+    state.status = null;
+    await refreshStatus();
+    render();
   } catch (e) { show("Failed: " + e.message, 0); fail(e); }
 }
 
@@ -787,6 +826,29 @@ document.body.addEventListener("click", async (e) => {
         break;
       case "pull": await pullModel(); break;
       case "logs": await loadLogs(); break;
+      case "setup-pull": {
+        a.disabled = true;
+        await setupPull(a.dataset.name);
+        a.disabled = false;
+        break;
+      }
+      case "setup-refresh": {
+        state.status = null;
+        await render();
+        break;
+      }
+      case "setup-test": {
+        const out = $("#setupTest");
+        out.textContent = "Testing…"; a.disabled = true;
+        const r = await api("/setup/test", { method: "POST" }).catch(() => null);
+        a.disabled = false;
+        state.status = null;
+        await refreshStatus();
+        if (!r) { out.textContent = "The local server did not answer."; break; }
+        out.textContent = r.ok ? `${r.model} answered in ${(r.ms / 1000).toFixed(1)} s: “${r.answer}”` : `Not working: ${r.error}`;
+        out.className = r.ok ? "hint" : "hint err-text";
+        break;
+      }
       case "detect": {
         a.disabled = true; $("#detected").innerHTML = '<p class="sub">Looking…</p>';
         const found = await api("/engines/detect");
