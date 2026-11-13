@@ -13,7 +13,7 @@
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-14b8a6"></a>
   <img alt="Python 3.11 or newer" src="https://img.shields.io/badge/python-3.11%2B-14b8a6">
   <img alt="Windows, macOS and Linux" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-14b8a6">
-  <img alt="107 offline tests and 3 live tests pass" src="https://img.shields.io/badge/tests-107%20offline%20%2B%203%20live-14b8a6">
+  <img alt="114 offline tests and 3 live tests pass" src="https://img.shields.io/badge/tests-114%20offline%20%2B%203%20live-14b8a6">
   <img alt="Local first, no uploads" src="https://img.shields.io/badge/local--first-no%20uploads-0f766e">
 </p>
 
@@ -34,6 +34,7 @@ It runs on Windows, macOS and Linux, reads Arabic alongside English, and offers 
 The showcase site is in [`docs/`](docs/index.html) and is ready for GitHub Pages.
 
 - **Try the demo:** [https://M0-AR.github.io/daftar/](https://M0-AR.github.io/daftar/)
+- **Open the desktop app:** the “Open the full app” button uses a `daftar://` link. The first normal launch registers the handler for your user only; no administrator rights. If nothing opens, the page shows an install panel.
 - **Play the 3D Knowledge Lab:** ten steps build a retrieval brain; drag to rotate, click the node that matches the definition.
 - **Take the quiz:** ten questions with a short explanation after every answer.
 - **Move the sliders:** a simple calculator shows how much document searching costs in time and money.
@@ -160,6 +161,8 @@ daftar --headless --port 8765
 
 Then open the address it prints (for example `http://127.0.0.1:8765`).
 
+The first launch also registers a `daftar://` link handler for your user, so the “Open the full app” button on the website can start the desktop app. This is per-user, needs no administrator rights, and does not change your default browser. If you move the project, start it once with `daftar --register-protocol` to refresh the link. On macOS, the link is registered by the built `.app` bundle; a source run can still use the browser.
+
 > **What is `127.0.0.1`?** It means “this computer”. The server is not reachable from the internet; it only listens on your own machine.
 
 ### Step 6 — Make your first collection
@@ -200,10 +203,11 @@ Set `DAFTAR_HOME` before starting the app to use a different folder. Back up tha
 | A scanned PDF has no text | The built-in engine cannot read images. Switch to Ollama with a vision model. |
 | Answers feel slow | Use a smaller model (2B), close memory-hungry apps, or use a computer with a GPU. |
 | The browser did not open | Run `daftar --browser`, or `daftar --headless --port 8765` and open the printed address. |
+| The website's “Open the full app” button does nothing | Allow the browser's external-protocol prompt. If you moved the project, run `daftar --register-protocol`. On macOS, use the built `.app`; source runs do not register the link. |
 
 ### Step 10 — Uninstall or start over
 
-Close Daftar, delete the data folder from Step 8, then delete the project folder. Nothing else is left behind: there is no service, no account and no cloud copy. Original documents are untouched.
+Close Daftar, delete the data folder from Step 8, then delete the project folder. On Linux and Windows, one small per-user link handler remains so the website button can find the app; remove it with `rm ~/.local/share/applications/daftar.desktop` on Linux or `reg delete "HKCU\Software\Classes\daftar" /f` on Windows. There is no service, no account and no cloud copy. Original documents are untouched.
 
 ### Words you will hear, in plain language
 
@@ -351,7 +355,7 @@ These are development-machine measurements, not a leaderboard claim. The evaluat
 | Structure-aware retrieval | **1.000** recall@4 | Section-aware chunking · naive baseline 0.700 |
 | Warm answer latency | **0.3 s** | RTX 3090 · gemma3:1b · 368 tokens/s · cold start 9.4 s |
 | OCR on CPU | **23 s / page** | PaddleOCR-VL 1.6 · 1.9 GB RAM · English + Arabic lines |
-| Automated tests | **107 offline + 3 live** | All passing · live tests need a local model |
+| Automated tests | **114 offline + 3 live** | All passing · live tests need a local model |
 
 Latency depends on your hardware. A 2B model on a modern laptop is slower than the RTX figure and still usable; a GPU makes it feel instant. OCR speed depends on page complexity. The retrieval numbers come from a fixed evaluation set, not a claim about every document. Read the [research notes](docs/RESEARCH.md) for methods and sources.
 
@@ -430,7 +434,7 @@ pip install -e ".[dev]"
 .venv/bin/python -m pytest -m live    # built-in llama.cpp smoke test + end-to-end against Ollama
 ```
 
-The offline suite needs no model and no network. The live suite needs a local model and is skipped otherwise. Current result: **107 offline + 3 live, all passing**.
+The offline suite needs no model and no network. The live suite needs a local model and is skipped otherwise. Current result: **114 offline + 3 live, all passing**.
 
 ---
 

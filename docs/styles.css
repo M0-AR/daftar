@@ -67,6 +67,14 @@ code{font:0.86em ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background
 .hero h1 .grad{background:linear-gradient(100deg,var(--accent-hi) 10%,#7dd3fc 55%,var(--gold) 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
 .hero .lead{font-size:clamp(1.05rem,1.7vw,1.24rem)}
 .hero-cta{display:flex;flex-wrap:wrap;gap:12px;margin:26px 0 20px}
+.app-fallback{margin:0 0 22px;padding:16px 18px;border:1px solid rgba(251,191,36,.32);border-radius:14px;background:rgba(251,191,36,.06);max-width:640px}
+.app-fallback[hidden]{display:none}
+.app-fallback p{margin:0 0 8px;color:var(--muted);font-size:.88rem;line-height:1.6}
+.app-fallback b{color:var(--text)}
+.app-fallback-actions{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 8px}
+.app-fallback-note{font-size:.76rem!important;color:var(--faint)!important;margin:0!important}
+.app-fallback code{font-size:.8em;color:#d5f5ef}
+.btn.is-launching{opacity:.72}
 .trust{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--faint);font-size:.84rem;font-weight:550}
 .trust span{display:inline-flex;align-items:center;gap:7px}
 .trust svg{width:15px;height:15px;color:var(--accent);flex:none}

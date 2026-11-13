@@ -63,10 +63,19 @@
       <h1>Your documents.<br>Your computer.<br><span class="grad">Real answers.</span></h1>
       <p class="lead">Daftar is a private document assistant for contracts, reports, research and notes. Ask in plain language. Get an answer that cites the exact passage — with a match score you can check. Nothing leaves your machine.</p>
       <div class="hero-cta">
-        <a class="btn primary" href="#demo">Try the live demo
+        <a class="btn primary" href="daftar://open" id="openApp">Open the full app
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </a>
-        <a class="btn" href="#start">Get started in 3 commands</a>
+        <a class="btn" href="#demo">Try the live demo</a>
+        <a class="btn ghost" href="#start">Get started in 3 commands</a>
+      </div>
+      <div class="app-fallback" id="appFallback" role="status" aria-live="polite" hidden>
+        <p><b>Daftar should be opening.</b> If it did not, your browser may be asking for permission — allow it. If Daftar is not installed yet, install it once, then press the button again.</p>
+        <div class="app-fallback-actions">
+          <a class="btn primary small" href="#start">Install Daftar</a>
+          <a class="btn small" href="https://github.com/M0-AR/daftar">View the source</a>
+        </div>
+        <p class="app-fallback-note">The button uses a <code>daftar://</code> link that the desktop app registers on first launch. The browser demo below works without installing anything.</p>
       </div>
       <div class="trust">
         <span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/></svg>No accounts</span>
@@ -291,7 +300,7 @@
           <tr><td><b>Structure-aware retrieval</b></td><td><span class="good">1.000</span> recall@4</td><td class="muted">Section-aware chunking · naive baseline 0.700</td></tr>
           <tr><td><b>Warm answer latency</b></td><td><span class="good">0.3 s</span></td><td class="muted">RTX 3090 · gemma3:1b · 368 tokens/s · cold start 9.4 s</td></tr>
           <tr><td><b>OCR on CPU</b></td><td><span class="good">23 s / page</span></td><td class="muted">PaddleOCR-VL 1.6 · 1.9 GB RAM · English + Arabic lines</td></tr>
-          <tr><td><b>Automated tests</b></td><td><span class="good">107 offline + 3 live</span></td><td class="muted">All passing · live tests need a local model</td></tr>
+          <tr><td><b>Automated tests</b></td><td><span class="good">114 offline + 3 live</span></td><td class="muted">All passing · live tests need a local model</td></tr>
         </tbody>
       </table>
     </div>

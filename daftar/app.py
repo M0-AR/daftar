@@ -1,7 +1,9 @@
 """Desktop launcher: local server on a free loopback port, shown in a native window (or the browser)."""
 import argparse
 import logging
+import signal
 import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -9,7 +11,12 @@ import webbrowser
 import uvicorn
 
 from daftar import APP_NAME
+from daftar.activation import (InstanceLock, clear_running_url, is_activation_url,
+                               open_running_instance, register_protocol, write_running_url)
+from daftar.config import data_dir
 from daftar.server import create_app
+
+log = logging.getLogger(__name__)
 
 
 def free_port() -> int:
@@ -86,40 +93,73 @@ def main():
     parser.add_argument("--browser", action="store_true", help="open in the web browser instead of a window")
     parser.add_argument("--headless", action="store_true", help="only run the local server")
     parser.add_argument("--self-test", action="store_true", help="check bundled libraries and exit (for builds)")
+    parser.add_argument("--register-protocol", action="store_true",
+                        help="refresh the daftar:// link handler for this user")
+    parser.add_argument("activation", nargs="?", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.self_test:
         raise SystemExit(self_test())
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    if args.activation and not is_activation_url(args.activation):
+        parser.error(f"unexpected argument: {args.activation}")
 
-    port = args.port or free_port()
-    url = f"http://127.0.0.1:{port}/"
-    server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=port,
-                                           log_level="warning", access_log=False))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    while not server.started:
-        time.sleep(0.05)
-    print(f"{APP_NAME} running at {url}", flush=True)
-
-    if not args.headless and not args.browser:
+    if args.register_protocol or not args.headless:
         try:
-            import webview
-        except ImportError:
-            print("pywebview not installed; opening the browser instead.")
-        else:
-            webview.settings["ALLOW_DOWNLOADS"] = True  # document exports
-            webview.create_window(APP_NAME, url, width=1320, height=860, min_size=(900, 600),
-                                  background_color="#101418")
-            webview.start()
-            server.should_exit = True
+            register_protocol(force=args.register_protocol)
+        except Exception:
+            log.exception("Could not register the daftar:// link handler")
+
+    lock = InstanceLock(data_dir() / "daftar.lock")
+    if not lock.acquire():
+        if open_running_instance():
             return
-    if not args.headless:
-        webbrowser.open(url)
+        print(f"{APP_NAME} is already running, but its address is unavailable.", file=sys.stderr)
+        return
     try:
-        thread.join()
-    except KeyboardInterrupt:
-        server.should_exit = True
+        port = args.port or free_port()
+        url = f"http://127.0.0.1:{port}/"
+        server = uvicorn.Server(uvicorn.Config(create_app(), host="127.0.0.1", port=port,
+                                               log_level="warning", access_log=False))
+        thread = threading.Thread(target=server.run, daemon=True)
+        thread.start()
+        while not server.started:
+            time.sleep(0.05)
+        try:
+            write_running_url(url)
+        except OSError as exc:
+            log.warning("Could not publish the running address: %s", exc)
+        print(f"{APP_NAME} running at {url}", flush=True)
+
+        if not args.headless and not args.browser:
+            try:
+                import webview
+            except ImportError:
+                print("pywebview not installed; opening the browser instead.")
+            else:
+                webview.settings["ALLOW_DOWNLOADS"] = True  # document exports
+                webview.create_window(APP_NAME, url, width=1320, height=860, min_size=(900, 600),
+                                      background_color="#101418")
+                webview.start()
+                server.should_exit = True
+                return
+
+        def stop(*_):
+            server.should_exit = True
+
+        try:
+            signal.signal(signal.SIGTERM, stop)
+        except (ValueError, OSError):
+            pass
+        if not args.headless:
+            webbrowser.open(url)
+        try:
+            thread.join()
+        except KeyboardInterrupt:
+            server.should_exit = True
+    finally:
+        clear_running_url()
+        lock.release()
 
 
 if __name__ == "__main__":
