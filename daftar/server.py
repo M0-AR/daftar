@@ -377,7 +377,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
     @app.post("/api/models/pull")
     def pull_model(body: PullIn):
         name = body.name.strip()
-        need(name and " " not in name, 400, "Enter a model name like gemma3:1b")
+        need(name and " " not in name, 400, "Enter a model name like qwen3.5:2b")
         log.info("model download requested: %s", name)
 
         def stream():
@@ -760,7 +760,7 @@ def create_app(home: Path | None = None, ollama_factory=Ollama, openai_factory=O
                                      "passages_trimmed_to_fit": found - len(sources), "prompt": messages}
                 yield line({"type": "meta", "sources": sources, **meta})
                 t2 = time.perf_counter()
-                pieces = client.chat(model, messages, settings["temperature"], num_ctx)
+                pieces = client.chat(model, messages, settings["temperature"], num_ctx, think=settings["think"])
                 try:
                     for piece in pieces:
                         if not answer and piece:

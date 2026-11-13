@@ -72,8 +72,9 @@ class OpenAICompat:
         data = self._post("/embeddings", {"model": model, "input": texts})["data"]
         return [d["embedding"] for d in sorted(data, key=lambda d: d.get("index", 0))]
 
-    def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192):
-        """Stream answer text (server-sent events). The context window is set in the server app itself."""
+    def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192,
+             think: bool = False):
+        """Stream answer text (server-sent events). The context window and reasoning are set in the server app itself."""
         body = {"model": model, "messages": messages, "temperature": temperature, "stream": True}
         with self.http.stream("POST", "/chat/completions", json=body) as r:
             if r.status_code != 200:

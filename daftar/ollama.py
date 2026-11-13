@@ -91,10 +91,12 @@ class Ollama:
             body["options"] = {"num_ctx": num_ctx}
         return self._post("/api/embed", body)["embeddings"]
 
-    def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192):
+    def chat(self, model: str, messages: list[dict], temperature: float = 0.2, num_ctx: int = 8192,
+             think: bool = False):
         """Yield answer text pieces as Ollama streams them. num_ctx must cover the whole prompt:
-        Ollama silently drops the start of a prompt that does not fit (measured: 2048 of ~6000 tokens kept)."""
-        body = {"model": model, "messages": messages, "stream": True,
+        Ollama silently drops the start of a prompt that does not fit (measured: 2048 of ~6000 tokens kept).
+        think: Qwen3.5 and other reasoning models reason before answering unless this is explicitly false."""
+        body = {"model": model, "messages": messages, "stream": True, "think": think,
                 "options": {"num_ctx": num_ctx, "temperature": temperature}}
         with self.http.stream("POST", "/api/chat", json=body) as r:
             if r.status_code != 200:

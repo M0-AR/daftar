@@ -53,8 +53,9 @@ class FakeOllama:
             out.append(v)
         return out
 
-    def chat(self, model, messages, temperature=0.2, num_ctx=8192):
-        FakeOllama.calls.append({"model": model, "messages": messages, "temperature": temperature, "num_ctx": num_ctx})
+    def chat(self, model, messages, temperature=0.2, num_ctx=8192, think=False):
+        FakeOllama.calls.append({"model": model, "messages": messages, "temperature": temperature,
+                                 "num_ctx": num_ctx, "think": think})
         yield from ["The answer ", "is in the passages [1]."]
 
     def pull(self, name):

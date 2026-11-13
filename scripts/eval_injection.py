@@ -15,7 +15,8 @@ src = [{"page": 1, "ext": ".txt", "document": "contract.txt", "text": ATTACK},
 Q = "What is the monthly fee?"
 
 def run(messages):
-    body = {"model": MODEL, "stream": False, "messages": messages, "options": {"num_ctx": 4096, "temperature": 0.2, "seed": None}}
+    body = {"model": MODEL, "stream": False, "messages": messages, "think": False,
+            "options": {"num_ctx": 4096, "temperature": 0.2, "seed": None}}
     r = json.load(urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:11434/api/chat", json.dumps(body).encode(), {"Content-Type": "application/json"}), timeout=300))
     return r["message"]["content"]
 

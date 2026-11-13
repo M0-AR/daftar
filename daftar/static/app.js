@@ -561,7 +561,7 @@ async function renderSettings() {
         <div class="field"><label>Search model (embeddings)</label><select data-setting="embed_model">${opts(embedModels, cfg.embed_model)}</select>
           <span class="hint">${!s.embed_ready ? "No search model installed: search matches words only, not meaning."
             : s.embed_active !== cfg.embed_model.replace(/:latest$/, "") ? `Not installed, so Daftar uses <b>${esc(s.embed_active)}</b> for meaning-based search.` : "Meaning-based search is on."}</span></div>
-        <div class="field"><label>Download a model</label><div class="row"><input type="text" id="pullName" placeholder="e.g. gemma3:1b or nomic-embed-text" style="flex:1">
+        <div class="field"><label>Download a model</label><div class="row"><input type="text" id="pullName" placeholder="e.g. qwen3.5:2b or nomic-embed-text" style="flex:1">
           <button class="btn" data-act="pull" ${cfg.engine === "openai" ? "disabled title=\"Download models in your AI app, then pick them here\"" : ""}>Download</button></div>
           <span class="hint">This is the one action that uses the internet: Ollama fetches the model from its library. Your documents are never sent.</span>
           <div class="progress" id="pullProgress" hidden><div class="row" style="justify-content:space-between"><span class="sub" id="pullStatus"></span><span class="sub" id="pullPct"></span></div><div class="meter"><i id="pullBar" style="width:0"></i></div></div></div>
@@ -574,6 +574,7 @@ async function renderSettings() {
         ${num("top_k", "Passages to use", "How many passages the AI reads before answering (1–20).", 1, 20)}
         ${num("scan_k", "Passages to scan", "How many candidate passages are examined to pick the best ones (4–100).", 4, 100)}
         ${sw("rerank", "Improve answer relevance", "Re-scores candidates by meaning and word overlap, and drops weak passages.")}
+        ${cfg.engine === "openai" ? "" : sw("think", "Let the model reason first", "Reasoning models think before answering. Daftar does not show that reasoning, so leaving this off is faster; on a processor it can take a minute per answer.")}
       </div></div>
     <div>
       <div class="panel"><h2>Reading documents</h2>

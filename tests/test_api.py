@@ -215,6 +215,17 @@ def test_creativity_level_is_sent_as_temperature(api, fake):
     assert fake.calls[-1]["temperature"] == 1.4
 
 
+def test_thinking_is_off_by_default(api, fake):
+    """Qwen3.5 reasons first unless told otherwise; that hidden reasoning only adds delay here."""
+    cid = api.collection()
+    api.upload(cid, TXT)
+    api.ask(api.chat(cid), "termination")
+    assert fake.calls[-1]["think"] is False
+    api.c.put("/api/settings", json={"think": True})
+    api.ask(api.chat(cid), "termination")
+    assert fake.calls[-1]["think"] is True
+
+
 def test_passages_to_use_limits_sources(api):
     cid = api.collection()
     api.upload(cid, TXT)
@@ -312,12 +323,12 @@ def test_settings_are_clamped_and_reset(api):
     assert s["temperature"] == 2.0 and s["top_k"] == 1 and s["theme"] == "light" and "unknown" not in s
     assert s["chunk_overlap"] < s["chunk_size"]
     d = api.c.post("/api/settings/reset").json()
-    assert d["temperature"] == 0.2 and d["theme"] == "dark" and d["chat_model"] == "gemma3:1b"
+    assert d["temperature"] == 0.2 and d["theme"] == "dark" and d["chat_model"] == "qwen3.5:2b"
 
 
 def test_chat_model_falls_back_when_default_missing(api):
     status = api.c.get("/api/status").json()
-    assert status["settings"]["chat_model"] == "gemma3:1b" and status["chat_model"] == "fake-chat:latest"
+    assert status["settings"]["chat_model"] == "qwen3.5:2b" and status["chat_model"] == "fake-chat:latest"
 
 
 def test_model_download_streams_progress(api):
@@ -396,7 +407,7 @@ def test_stop_saves_partial_answer_and_closes_the_model_stream(tmp_path, fake):
     from daftar.server import create_app
     closed = threading.Event()
 
-    def slow_chat(self, model, messages, temperature=0.2, num_ctx=8192):
+    def slow_chat(self, model, messages, temperature=0.2, num_ctx=8192, think=False):
         try:
             for i in range(10_000):
                 yield f"word{i} "

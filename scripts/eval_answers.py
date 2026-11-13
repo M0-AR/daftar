@@ -1,8 +1,9 @@
 """Answer-quality check with a real model: is the answer right, and does it cite a passage?
 
-    python scripts/eval_answers.py gemma3:1b            # compares passage formats plain vs json
+    python scripts/eval_answers.py qwen3.5:2b           # compares passage formats plain vs json
 """
 import json
+import os
 import re
 import sys
 import time
@@ -28,6 +29,8 @@ assert len(KEYS) == len(ev.QUESTIONS)
 
 def ask(model, messages):
     body = {"model": model, "stream": False, "messages": messages, "options": {"num_ctx": 4096, "temperature": 0.2}}
+    if os.environ.get("EVAL_THINK") != "on":
+        body["think"] = False  # Qwen3.5 thinks by default; hidden reasoning only adds latency in a RAG app
     req = urllib.request.Request("http://127.0.0.1:11434/api/chat", json.dumps(body).encode(),
                                  {"Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(req, timeout=300))["message"]["content"]
@@ -56,4 +59,4 @@ def main(model):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "gemma3:1b")
+    main(sys.argv[1] if len(sys.argv) > 1 else "qwen3.5:2b")

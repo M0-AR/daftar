@@ -10,10 +10,11 @@ DEFAULTS = {
     "openai_url": "http://127.0.0.1:1234",
     "openai_key": "",
     "allow_remote_ollama": False,   # a server on another machine means documents leave this one
-    "chat_model": "gemma3:1b",
+    "chat_model": "qwen3.5:2b",      # Apache-2.0; measured better answers and citations than gemma3:1b (docs/RESEARCH.md #25)
     "embed_model": "qwen3-embedding:0.6b",  # multilingual incl. Arabic dialects; any installed embedder is used if missing
     "ocr_model": "paddleocr-vl:1.6",  # reads scanned pages; any installed vision model is used if missing
     "temperature": 0.2,             # "Creativity": 0 precise .. 2 varied
+    "think": False,                 # reasoning models think first by default; the reasoning is not shown, so it only adds delay
     "top_k": 6,                     # passages given to the model
     "scan_k": 24,                   # candidate passages examined before picking top_k
     "chunk_size": 1000,             # characters per passage
